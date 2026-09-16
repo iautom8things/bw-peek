@@ -84,6 +84,25 @@ prefix bw's registry knows resolves from any cwd, so `think-1pp` opens from the
 `adf` repo. A partial id (`think-1`) draws bw's ambiguous list as buttons. A
 missing ticket says so.
 
+**Cost.** A redraw never waits on bw: the board list is read in the background
+and the reply redraws when it lands. What the mention hook adds per redraw of an
+assistant block, measured on 2.1.273 (`bun run tests/perf/mentions.bench.ts`
+for the scan alone, `tests/perf/render.test.ts` for the hook through the engine
+harness), against a 500-ticket board:
+
+| reply | scan alone | whole hook per redraw |
+| --- | --- | --- |
+| 2 KB prose, no candidates | 0.23 ms | 0.43 ms |
+| 5 KB, 100 bare candidates, 1 real | 0.35 ms | 0.73 ms |
+| 5 KB, 100 candidates, 5 real | 0.35 ms | 0.71 ms |
+| 5 KB, 100 candidates, 10 real | 0.33 ms | 0.56 ms |
+| 50 KB, 1000 candidates, 100 real | 3.4 ms | 1.3 ms |
+
+The share of real ids does not move the number; text length does (two regex
+passes over the block, about 70 µs per KB). A set lookup per candidate is
+nanoseconds. The one-time `bw list --all` is about 0.4 s for 500 tickets and
+runs off the render path.
+
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
 `[ Refresh ]` always runs `bw show` again. The recent list (ten ids) lives in the
 plugin store across sessions.
@@ -124,7 +143,8 @@ claude --plugin-dir llms/skills/bw-peek          # load from disk; edits hot-rel
 claude plugin validate llms/skills/bw-peek       # what the module hooks and calls
 cd llms/skills/bw-peek
 bun test tests/unit                              # ids, mentions, parsing, digest, wrap
-claude plugin test .                             # pane and mention row through the engine's $, bw mocked by argv
+claude plugin test .                             # pane and mention row through the engine's $, bw mocked by argv; tests/perf bounds the redraw cost
+bun run tests/perf/mentions.bench.ts             # µs per scan at 100 and 1000 candidates
 bunx -p typescript tsc -p . && rm -f bun.lock package.json
 ```
 

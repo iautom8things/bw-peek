@@ -260,7 +260,13 @@ describe('under a reply', () => {
   })
 
   test('a bare id that is a ticket on this board gets a button too; other words and other boards do not', async ($, on) => {
-    world(on)
+    const { clock } = world(on)
+    // a redraw never waits on bw list: the first reply draws without the board, the read lands in the
+    // background and invalidates, and the redraw has it
+    const early = textOf(await reply($, 'Closed c50 early.', 'msg-0'))
+    expect(early).not.toContain('[adf-c50]')
+    await clock.settle()
+    expect(textOf(await reply($, 'Closed c50 early.', 'msg-0'))).toContain('◈ [adf-c50]')
     const text = textOf(await reply($, 'Closed c50 and wxh.5; the guard in zu6 is next, but abc and 1pp are not ours and c50 repeats.'))
     expect(text).toContain('◈ [adf-c50] [adf-wxh.5] [adf-zu6]')
     expect(text).not.toContain('adf-the')
@@ -271,6 +277,7 @@ describe('under a reply', () => {
     const { calls, clock } = world(on, {}, 'adf', {}, [LIST, `${LIST}\n○ adf-q7z P2 just filed`])
     on('tool.call', { tool: 'Bash' }, async () => ({ result: { stdout: 'created adf-q7z: just filed', stderr: '', interrupted: false } }))
     expect(textOf(await reply($, 'Filed q7z for this.'))).not.toContain('adf-q7z')
+    await clock.settle()
     await $.tool.call({ tool: 'Bash', command: "bw create 'just filed' -t task", description: 'File a ticket' })
     await clock.settle()
     expect(calls.filter(c => c[1] === 'list')).toHaveLength(2)

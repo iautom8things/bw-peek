@@ -115,10 +115,11 @@ function refreshKnown($: EngineInterface): Promise<void> {
   return knownRefresh
 }
 
+// never blocks a drawing on bw: a missing or stale list is fetched in the background and the reply
+// redraws (the refresh invalidates) once it lands
 async function knownIfFresh($: EngineInterface): Promise<Known | undefined> {
   if (defaultPrefix === undefined || !bareMentions) return undefined
-  if (known === undefined) await refreshKnown($)
-  else if ((await $.clock.now()) - knownAt > KNOWN_STALE_MS) fire($, 'bw list', refreshKnown($))
+  if (known === undefined || (await $.clock.now()) - knownAt > KNOWN_STALE_MS) fire($, 'bw list', refreshKnown($))
   return known
 }
 

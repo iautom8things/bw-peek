@@ -1,0 +1,4 @@
+{
+  "description": "bw-peek: a Beadwork ticket pane opened by /bw <id>, a search box, or the id buttons drawn under replies. Needs CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1; builds without function hooks ignore the modules key.",
+  "modules": ["./register.tsx"]
+}

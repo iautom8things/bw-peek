@@ -1,0 +1,34 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "bw-peek",
+  "version": "0.1.0",
+  "description": "A Beadwork ticket pane inside Claude Code: /bw <id> or a search box runs bw show and draws the digest, title, description and comments; every ticket id a reply mentions gets a button that opens it. Needs function hooks (CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1).",
+  "author": { "name": "Manuel Zubieta", "email": "i@autom8things.com" },
+  "keywords": ["beadwork", "bw", "tickets", "issues", "pane", "function-hooks"],
+  "userConfig": {
+    "mention_buttons": {
+      "type": "boolean",
+      "title": "Ticket buttons under replies",
+      "description": "Draw a row of [ id ] buttons under every reply that mentions a Beadwork ticket",
+      "default": true
+    },
+    "mention_cap": {
+      "type": "number",
+      "title": "Buttons per reply",
+      "description": "Most ids drawn under one reply before '+N more' (1 to 20)",
+      "default": 6
+    },
+    "collapsed_rows": {
+      "type": "number",
+      "title": "Description rows when collapsed",
+      "description": "Rows of the description shown before [ Show all ] (3 to 40)",
+      "default": 8
+    },
+    "digest_chars": {
+      "type": "number",
+      "title": "Comment digest length",
+      "description": "Characters of each comment shown before its expand button (20 to 200)",
+      "default": 50
+    }
+  }
+}

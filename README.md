@@ -77,6 +77,13 @@ esc closes · type an id and press enter · /bw <id> from the prompt
   so a long paragraph is cut mid-way with an ellipsis rather than hidden whole.
 - Comments, each as `[ + ]`, its time, and the first 50 characters. `[ + ]`
   opens the full text in a box; `[ − ]` folds it.
+- Every ticket id inside the description, the close reason or an open comment
+  is drawn in place as a button: `isolated from [ adf-lxh ] after [ adf-c50 ]
+  landed`. Full ids with a known prefix and bare ids on this board both count,
+  the same rule as under a reply. A press opens that ticket, and `recent` is
+  the way back. The plugin lays these texts out itself (a word wrap where an id
+  is one token as wide as its button), so the row counts and the collapse cut
+  are exact.
 
 **Search.** The box takes a full id in any case, with wrapping punctuation or a
 pasted `bw show adf-c50` around it; a bare local part (`c50`, `wxh.5`) takes
@@ -135,7 +142,7 @@ Set under `pluginConfigs["bw-peek@skills-dir"].options` in the user
 | focus | after a submit the ring is put back on the search box with `$.ui.focus`, so the next id can be typed at once |
 
 `hooks/ticket.ts` is the pure part (ids, mentions, JSON parsing, digest, time,
-word wrap) under `bun test`; `hooks/draw.tsx` takes the resolved element table
+the row layout with inline ids) under `bun test`; `hooks/draw.tsx` takes the resolved element table
 and a `View` and never sees `$`; `hooks/register.tsx` holds the hooks and every
 engine call.
 

@@ -280,6 +280,8 @@ async function viewOf($: EngineInterface): Promise<View> {
     recent,
     search,
     defaultPrefix,
+    matcher,
+    known: await knownIfFresh($),
     now: await $.clock.now(),
     collapsedRows,
     digestChars,

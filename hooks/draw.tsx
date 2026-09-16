@@ -3,18 +3,19 @@ import type { Elements, RenderElement } from 'claude-code'
 import {
   ago,
   firstRows,
+  type Known,
+  layoutRows,
   type Lookup,
   oneLine,
   parseDate,
   plural,
   PRIORITY_COLOR,
   relativeDays,
-  rowsAt,
+  type Row,
   shortDate,
   shortDateTime,
   statusOf,
   type Ticket,
-  wrapRows,
 } from './ticket.ts'
 
 // bw-peek: the two drawings. The pane is the ticket viewer: a search box, then the digest, the
@@ -51,6 +52,9 @@ export type View = {
   // the search field's text, as the person has typed it
   search: string
   defaultPrefix?: string
+  // what makes an id in a description or comment a button: the registry's prefixes, this board's ids
+  matcher?: RegExp
+  known?: Known
   now: number
   collapsedRows: number
   digestChars: number
@@ -117,6 +121,31 @@ function header(els: Els, v: View, columns: number, actions: Actions): RenderEle
         />
       </Box>
       {divider(els, columns)}
+    </Box>
+  )
+}
+
+// a laid-out text: one Box per row, ids as buttons in place. Keys carry the row and column so a text
+// that names one ticket twice draws two working buttons.
+function paragraph(els: Els, rows: Row[], keyPrefix: string, actions: Actions, color?: string): RenderElement {
+  const { Box, Text, Button } = els
+  return (
+    <Box flexDirection="column">
+      {rows.map((row, r) =>
+        row.length === 0 ? (
+          <Text key={`${keyPrefix}-r${r}`}> </Text>
+        ) : (
+          <Box key={`${keyPrefix}-r${r}`} flexDirection="row">
+            {row.map((piece, c) =>
+              piece.kind === 'id' ? (
+                <Button key={`${keyPrefix}-${r}-${c}`} label={piece.id} onPress={() => actions.open(piece.id)} />
+              ) : (
+                <Text key={`${keyPrefix}-${r}-${c}`} color={color}>{piece.text}</Text>
+              ),
+            )}
+          </Box>
+        ),
+      )}
     </Box>
   )
 }
@@ -197,17 +226,17 @@ function description(els: Els, t: Ticket, v: View, columns: number, actions: Act
   const body = t.description.trim()
   const width = Math.max(10, columns - 2)
   if (body === '') return sectionTitle(els, 'Description', '(none)', null)
-  const rows = rowsAt(body, width)
-  const collapsible = rows > v.collapsedRows
+  const rows = layoutRows(body, width, v.matcher, v.known)
+  const collapsible = rows.length > v.collapsedRows
   const control = collapsible ? (
     <Button key="desc-toggle" label={v.descriptionExpanded ? 'Collapse' : `Show all`} dimColor onPress={actions.toggleDescription} />
   ) : null
-  const cut = collapsible && !v.descriptionExpanded ? firstRows(body, v.collapsedRows, width) : { shown: wrapRows(body, width).join('\n'), hidden: 0 }
+  const cut = collapsible && !v.descriptionExpanded ? firstRows(rows, v.collapsedRows, width) : { shown: rows, hidden: 0 }
   return (
     <Box flexDirection="column">
-      {sectionTitle(els, 'Description', plural(rows, 'row'), control)}
+      {sectionTitle(els, 'Description', plural(rows.length, 'row'), control)}
       <Box marginLeft={2} width={width} flexDirection="column">
-        <Text wrap="wrap">{cut.shown}</Text>
+        {paragraph(els, cut.shown, 'desc', actions)}
         {cut.hidden > 0 ? <Text dimColor>{`… ${plural(cut.hidden, 'more row')}`}</Text> : null}
       </Box>
     </Box>
@@ -239,7 +268,7 @@ function comments(els: Els, t: Ticket, v: View, columns: number, actions: Action
             </Box>
             {open ? (
               <Box marginLeft={6} width={Math.max(10, width - 6)} borderStyle="round" borderDimColor paddingX={1}>
-                <Text wrap="wrap">{c.text.trim()}</Text>
+                {paragraph(els, layoutRows(c.text.trim(), Math.max(4, width - 10), v.matcher, v.known), `c-${i}`, actions)}
               </Box>
             ) : null}
           </Box>
@@ -261,7 +290,7 @@ function ticketView(els: Els, t: Ticket, v: View, columns: number, actions: Acti
       {rel === null ? null : <Box marginTop={1}>{rel}</Box>}
       {t.closeReason === undefined ? null : (
         <Box marginTop={1} width={columns}>
-          <Text wrap="wrap" color="green">{`↳ ${t.closeReason.trim()}`}</Text>
+          {paragraph(els, layoutRows(`↳ ${t.closeReason.trim()}`, columns, v.matcher, v.known), 'why', actions, 'green')}
         </Box>
       )}
       {description(els, t, v, columns, actions)}

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { Row } from '../../hooks/ticket.ts'
 import {
   ago,
   findMentions,
@@ -14,10 +15,11 @@ import {
   parseTicket,
   relativeDays,
   firstRows,
-  rowsAt,
+  layoutRows,
+  piecesOf,
+  rowText,
   sortIds,
   statusOf,
-  wrapRows,
 } from '../../hooks/ticket.ts'
 
 const T0 = new Date('2026-09-16T10:00:00').getTime()
@@ -267,26 +269,46 @@ describe('time', () => {
   })
 })
 
-describe('wrapping', () => {
-  test('wraps at words, splits words longer than the width, keeps blank lines', () => {
-    expect(wrapRows('the quick brown fox jumps', 10)).toEqual(['the quick', 'brown fox', 'jumps'])
-    expect(wrapRows('a'.repeat(25), 10)).toEqual(['aaaaaaaaaa', 'aaaaaaaaaa', 'aaaaa'])
-    expect(wrapRows('one\n\ntwo\n\n\n', 80)).toEqual(['one', '', 'two'])
-    expect(wrapRows('', 80)).toEqual([])
+describe('layout with inline ids', () => {
+  const m = mentionMatcher(['adf', 'think'])
+  const known = { prefix: 'adf', ids: new Set(['adf-lxh', 'adf-zu6', 'adf-c50']) }
+
+  test('piecesOf splits a line around full and bare ids, keeping the text as written', () => {
+    expect(piecesOf('see `adf-lxh` and zu6.', m, known)).toEqual([
+      { kind: 'text', text: 'see `' },
+      { kind: 'id', id: 'adf-lxh', text: 'adf-lxh' },
+      { kind: 'text', text: '` and ' },
+      { kind: 'id', id: 'adf-zu6', text: 'zu6' },
+      { kind: 'text', text: '.' },
+    ])
+    expect(piecesOf('ADF-C50 first', m, known)).toEqual([{ kind: 'id', id: 'adf-c50', text: 'ADF-C50' }, { kind: 'text', text: ' first' }])
+    expect(piecesOf('nothing here', m, known)).toEqual([{ kind: 'text', text: 'nothing here' }])
   })
 
-  test('rowsAt counts what wrapRows makes', () => {
-    expect(rowsAt('short', 80)).toBe(1)
-    expect(rowsAt('a'.repeat(100), 40)).toBe(3)
-    expect(rowsAt('one\n\ntwo\n\n\n', 80)).toBe(3)
+  test('wraps at words, an id is one token as wide as its button, blank lines stay', () => {
+    const rows = layoutRows('the quick brown fox jumps', 10)
+    expect(rows.map(rowText)).toEqual(['the quick', 'brown fox', 'jumps'])
+    // "fix adf-lxh now": "fix " is 4 cells, the button 7 + 4 = 11, " now" 4 more
+    const withId = layoutRows('fix adf-lxh now', 15, m, known)
+    expect(withId.map(rowText)).toEqual(['fix adf-lxh', 'now'])
+    expect(withId[0]?.[1]).toEqual({ kind: 'id', id: 'adf-lxh', text: 'adf-lxh' })
+    expect(layoutRows('fix adf-lxh now', 14, m, known).map(rowText)).toEqual(['fix', 'adf-lxh', 'now'])
+    expect(layoutRows('fix adf-lxh now', 19, m, known).map(rowText)).toEqual(['fix adf-lxh now'])
+    expect(layoutRows('one\n\ntwo\n\n\n', 80).map(rowText)).toEqual(['one', '', 'two'])
+    expect(layoutRows('', 80)).toEqual([])
+  })
+
+  test('a word wider than the row is split', () => {
+    expect(layoutRows('a'.repeat(25), 10).map(rowText)).toEqual(['aaaaaaaaaa', 'aaaaaaaaaa', 'aaaaa'])
+    expect(layoutRows('x ' + 'b'.repeat(12) + ' y', 10).map(rowText)).toEqual(['x bbbbbbbb', 'bbbb y'])
   })
 
   test('firstRows keeps whole rows and marks the cut with an ellipsis', () => {
-    const text = 'Ready-for: implement\n\n' + 'word '.repeat(60).trim()
-    const cut = firstRows(text, 4, 20)
-    expect(cut.shown.split('\n')).toHaveLength(4)
-    expect(cut.shown.endsWith('…')).toBe(true)
-    expect(cut.hidden).toBe(rowsAt(text, 20) - 4)
-    expect(firstRows('short', 4, 20)).toEqual({ shown: 'short', hidden: 0 })
+    const rows = layoutRows('Ready-for: implement\n\n' + 'word '.repeat(60).trim(), 20)
+    const cut = firstRows(rows, 4, 20)
+    expect(cut.shown).toHaveLength(4)
+    expect(rowText(cut.shown[3] as Row)).toMatch(/…$/)
+    expect(cut.hidden).toBe(rows.length - 4)
+    expect(firstRows(layoutRows('short', 20), 4, 20)).toEqual({ shown: [[{ kind: 'text', text: 'short' }]], hidden: 0 })
   })
 })

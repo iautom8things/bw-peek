@@ -316,50 +316,127 @@ export function lines(text: string): string[] {
   return out
 }
 
-// the text as the rows it takes at a width: a greedy word wrap, words longer than the width split.
-// The drawings hand Text these rows joined with newlines, so what is counted is what is drawn.
-export function wrapRows(text: string, columns: number): string[] {
-  const w = Math.max(1, columns)
-  const out: string[] = []
+// ---- inline ids ----------------------------------------------------------------------------------
+
+// a run of a line: plain text, or a ticket id drawn as a button (full id with a known prefix, or a
+// bare local part that is a ticket on the session board). `text` is the id as written.
+export type Piece = { kind: 'text'; text: string } | { kind: 'id'; id: string; text: string }
+export type Row = Piece[]
+
+// cells a Button takes on the terminal beyond its label: the engine's `[ ` and ` ]`
+export const BUTTON_CHROME = 4
+
+function hitsIn(text: string, matcher: RegExp | undefined, known: Known | undefined): { at: number; end: number; id: string }[] {
+  const hits: { at: number; end: number; id: string }[] = []
+  if (matcher !== undefined) for (const m of text.matchAll(matcher)) hits.push({ at: m.index, end: m.index + m[0].length, id: m[0].toLowerCase() })
+  if (known !== undefined && known.ids.size > 0)
+    for (const m of text.matchAll(BARE_RE)) {
+      const word = m[0].toLowerCase()
+      if (STOPWORDS.has(word)) continue
+      const id = `${known.prefix}-${word}`
+      if (known.ids.has(id)) hits.push({ at: m.index, end: m.index + m[0].length, id })
+    }
+  hits.sort((a, b) => a.at - b.at || b.end - a.end)
+  // overlapping hits (a bare match inside a full id) keep the earlier, longer one
+  const out: typeof hits = []
+  for (const h of hits) if (out.length === 0 || h.at >= (out[out.length - 1] as { end: number }).end) out.push(h)
+  return out
+}
+
+// one line as pieces, in order
+export function piecesOf(line: string, matcher: RegExp | undefined, known: Known | undefined): Piece[] {
+  const out: Piece[] = []
+  let at = 0
+  for (const h of hitsIn(line, matcher, known)) {
+    if (h.at > at) out.push({ kind: 'text', text: line.slice(at, h.at) })
+    out.push({ kind: 'id', id: h.id, text: line.slice(h.at, h.end) })
+    at = h.end
+  }
+  if (at < line.length) out.push({ kind: 'text', text: line.slice(at) })
+  return out
+}
+
+function widthOf(piece: Piece): number {
+  return piece.kind === 'id' ? piece.id.length + BUTTON_CHROME : piece.text.length
+}
+
+// a text laid out as rows at a width: a greedy word wrap where an id is one unbreakable token as wide
+// as its button, words longer than the width split, blank lines kept as empty rows. What is counted
+// is what is drawn, so the collapse threshold and the ellipsis land on real rows.
+export function layoutRows(text: string, width: number, matcher?: RegExp, known?: Known): Row[] {
+  const w = Math.max(1, width)
+  const rows: Row[] = []
   for (const line of lines(text)) {
-    if (line.length <= w) {
-      out.push(line)
-      continue
+    // tokens: words with their trailing space, ids atomic
+    const tokens: Piece[] = []
+    for (const piece of piecesOf(line, matcher, known)) {
+      if (piece.kind === 'id') {
+        tokens.push(piece)
+        continue
+      }
+      for (const m of piece.text.matchAll(/\S+\s*|\s+/g)) tokens.push({ kind: 'text', text: m[0] })
     }
-    let row = ''
-    for (const word of line.split(' ')) {
-      let rest = word
-      while (rest.length > w) {
-        if (row !== '') {
-          out.push(row)
-          row = ''
+    let row: Row = []
+    let used = 0
+    const flush = () => {
+      rows.push(merge(row))
+      row = []
+      used = 0
+    }
+    for (const t of tokens) {
+      if (t.kind === 'text' && t.text.length > w) {
+        // a word wider than the row: hard split
+        let rest = t.text
+        while (rest.length > 0) {
+          const room = w - used
+          if (room <= 0) flush()
+          const take = rest.slice(0, w - used)
+          row.push({ kind: 'text', text: take })
+          used += take.length
+          rest = rest.slice(take.length)
+          if (used >= w && rest.length > 0) flush()
         }
-        out.push(rest.slice(0, w))
-        rest = rest.slice(w)
+        continue
       }
-      if (row === '') row = rest
-      else if (row.length + 1 + rest.length <= w) row += ` ${rest}`
-      else {
-        out.push(row)
-        row = rest
-      }
+      // a trailing space may hang past the edge
+      const need = t.kind === 'text' ? t.text.trimEnd().length : widthOf(t)
+      if (row.length > 0 && used + need > w) flush()
+      row.push(t)
+      used += widthOf(t)
     }
-    out.push(row)
+    rows.push(merge(row))
+  }
+  return rows
+}
+
+// adjacent text pieces as one; a row's trailing spaces dropped
+function merge(row: Row): Row {
+  const out: Row = []
+  for (const p of row) {
+    const last = out[out.length - 1]
+    if (p.kind === 'text' && last?.kind === 'text') last.text += p.text
+    else out.push(p.kind === 'text' ? { ...p } : p)
+  }
+  const last = out[out.length - 1]
+  if (last?.kind === 'text') {
+    last.text = last.text.trimEnd()
+    if (last.text === '') out.pop()
   }
   return out
 }
 
-// how many rows a text takes at a width; the pane's collapse threshold reads this
-export function rowsAt(text: string, columns: number): number {
-  return wrapRows(text, columns).length
+// the first `count` rows, an ellipsis on the last when more follow
+export function firstRows(rows: Row[], count: number, width: number): { shown: Row[]; hidden: number } {
+  if (rows.length <= count) return { shown: rows, hidden: 0 }
+  const shown = rows.slice(0, Math.max(1, count)).map(r => [...r])
+  const last = shown[shown.length - 1] as Row
+  const used = last.reduce((n, p) => n + widthOf(p), 0)
+  const tail = last[last.length - 1]
+  if (used < width) last.push({ kind: 'text', text: '…' })
+  else if (tail?.kind === 'text' && tail.text.length > 0) last[last.length - 1] = { kind: 'text', text: `${tail.text.slice(0, -1)}…` }
+  return { shown, hidden: rows.length - shown.length }
 }
 
-// the first `rows` rows of a text at a width, an ellipsis on the last when more follow
-export function firstRows(text: string, rows: number, columns: number): { shown: string; hidden: number } {
-  const all = wrapRows(text, columns)
-  if (all.length <= rows) return { shown: all.join('\n'), hidden: 0 }
-  const kept = all.slice(0, Math.max(1, rows))
-  const last = kept[kept.length - 1] as string
-  kept[kept.length - 1] = last.length >= columns ? `${last.slice(0, Math.max(0, columns - 1))}…` : `${last}…`
-  return { shown: kept.join('\n'), hidden: all.length - kept.length }
+export function rowText(row: Row): string {
+  return row.map(p => (p.kind === 'id' ? p.text : p.text)).join('')
 }

@@ -19,7 +19,8 @@ import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, pars
 // Nothing here writes to bw. Recent lookups live in $.store across sessions.
 
 const PANE_ID = 'bw'
-const RECENT_KEY = 'recent-v1'
+// v2: only ids bw answered with a ticket; v1 kept every search, misses and all
+const RECENT_KEY = 'recent-v2'
 const RECENT_CAP = 10
 // a ticket shown again within this window is not re-fetched; Refresh always is
 const FRESH_MS = 30_000
@@ -144,9 +145,24 @@ function ensureCommand($: EngineInterface): Promise<void> {
   return commandRegistered
 }
 
+// recent is a trail of tickets, never of searches: an id joins once bw answered with a ticket and
+// leaves the moment a lookup says it is not one
 function remember($: EngineInterface, id: string): void {
   recent = [id, ...recent.filter(r => r !== id)].slice(0, RECENT_CAP)
   $.store.set(RECENT_KEY, recent).catch(err => log($, `store write failed: ${err}`))
+}
+
+function forget($: EngineInterface, id: string): void {
+  if (!recent.includes(id)) return
+  recent = recent.filter(r => r !== id)
+  $.store.set(RECENT_KEY, recent).catch(err => log($, `store write failed: ${err}`))
+}
+
+function noteLookup($: EngineInterface, id: string): void {
+  const l = lookups[id]
+  if (l === undefined) return
+  if (l.kind === 'ticket') remember($, id)
+  else forget($, id)
 }
 
 async function openPane($: EngineInterface): Promise<void> {
@@ -190,11 +206,10 @@ async function show($: EngineInterface, id: string, force = false): Promise<void
     openComments = new Set()
   }
   current = id
-  remember($, id)
   await openPane($)
   const have = lookups[id]
-  if (!force && have !== undefined && (await $.clock.now()) - have.at < FRESH_MS) return
-  await fetch($, id)
+  if (force || have === undefined || (await $.clock.now()) - have.at >= FRESH_MS) await fetch($, id)
+  noteLookup($, id)
 }
 
 async function submit($: EngineInterface, value: string): Promise<void> {

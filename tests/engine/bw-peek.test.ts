@@ -214,8 +214,10 @@ describe('the pane', () => {
     text = textOf(await pane($))
     expect(text).toContain('Planning ticket')
     expect(text).toContain('Description (none)')
-    // the ambiguous lookup is now a recent entry
-    expect(text).toContain('recent [think-1]')
+    // the partial that bw could not resolve is not a recent entry; the ticket it led to is
+    expect(text).not.toContain('recent')
+    await run($, 'adf-zzz9')
+    expect(textOf(await pane($))).toContain('recent [think-1av] [forget]')
   })
 
   test('a missing ticket says so', async ($, on) => {
@@ -241,15 +243,20 @@ describe('the pane', () => {
     expect(shows()).toBe(3)
   })
 
-  test('the recent row starts from the store, grows with lookups, and forget clears it', async ($, on) => {
-    const { clock } = world(on, { 'adf-c50': ok(C50), 'adf-wxh.5': ok(WXH5) }, 'adf', { 'recent-v1': ['adf-zu6', 'not an id'] })
+  test('the recent row starts from the store, grows with tickets found, drops a miss, and forget clears it', async ($, on) => {
+    const { clock } = world(on, { 'adf-c50': ok(C50), 'adf-wxh.5': ok(WXH5) }, 'adf', { 'recent-v2': ['adf-zu6', 'adf-gone', 'not an id'] })
     await run($, '')
     let text = textOf(await pane($))
-    expect(text).toContain('recent [adf-zu6] [forget]')
+    expect(text).toContain('recent [adf-zu6] [adf-gone] [forget]')
     await run($, 'adf-c50')
     await run($, 'adf-wxh.5')
+    // a stored id that turns out not to exist any more leaves the trail; typos never join it
+    await run($, 'adf-gone')
+    await run($, 'adf-typo')
     text = textOf(await pane($))
-    expect(text).toContain('recent [adf-c50] [adf-zu6] [forget]')
+    expect(text).toContain('✗ no ticket matches adf-typo')
+    expect(text).toContain('recent [adf-wxh.5] [adf-c50] [adf-zu6] [forget]')
+    expect(text).not.toContain('adf-gone')
     await $.ui.press({ plugin: PLUGIN, key: 'forget', requestId: 'bw' })
     await clock.settle()
     text = textOf(await pane($))

@@ -105,8 +105,10 @@ nanoseconds. The one-time id list is about 0.3 s for 500 tickets and runs off
 the render path.
 
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
-`[ Refresh ]` always runs `bw show` again. The recent list (ten ids) lives in the
-plugin store across sessions.
+`[ Refresh ]` always runs `bw show` again. The `recent` row is a trail of
+tickets, not of searches: an id joins it once bw has answered with a ticket,
+a miss or an unresolved partial never does, and a stored id that stops
+resolving leaves. Ten ids, in the plugin store across sessions.
 
 ## Config
 

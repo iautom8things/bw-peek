@@ -25,11 +25,12 @@ tokens. Ids with unknown prefixes (`sha-256`, `utf-8`) draw nothing.
 
 Bare ids count too, when they are tickets on the session repo's own board:
 `c50`, `wxh.5`, `1jf.234` (three or four letters and digits, then any `.N`)
-draw as `[ adf-c50 ]` and so on. The board's ids come from `bw list --all`
-(about 50 KB of text for 500 tickets, well under a second), read at session
-start, re-read when a reply is drawn and the list is older than two minutes,
-and right after a `bw create`, `bw delete` or `bw import` runs through the Bash
-tool. A bare id never reaches another board: it has no way to say which one it
+draw as `[ adf-c50 ]` and so on. The board's ids come from
+`bw list --all --json | jq -r '.[].id'` (the JSON contract, one id per line,
+about 4 KB for 500 tickets in 0.3 s), read at session start, re-read when a
+reply is drawn and the list is older than two minutes, and right after a
+`bw create`, `bw delete` or `bw import` runs through the Bash tool. Without jq
+the plain `bw list --all` text listing is read instead. A bare id never reaches another board: it has no way to say which one it
 means. A short stoplist of common three- and four-letter words (`the`, `and`,
 `with`, `json`, ...) is skipped even if a ticket happens to spell one; that
 ticket is still one `/bw adf-the` away.
@@ -100,8 +101,8 @@ harness), against a 500-ticket board:
 
 The share of real ids does not move the number; text length does (two regex
 passes over the block, about 70 µs per KB). A set lookup per candidate is
-nanoseconds. The one-time `bw list --all` is about 0.4 s for 500 tickets and
-runs off the render path.
+nanoseconds. The one-time id list is about 0.3 s for 500 tickets and runs off
+the render path.
 
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
 `[ Refresh ]` always runs `bw show` again. The recent list (ten ids) lives in the
@@ -126,7 +127,7 @@ Set under `pluginConfigs["bw-peek@skills-dir"].options` in the user
 | --- | --- |
 | prefixes | `cat $HOME/.beadwork/registry.json` at session start (and after a hot reload), `repos.*.prefix`; the session repo's own prefix from `bw config get prefix` is added |
 | mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the board's id set; the engine's own drawing is wrapped in a column with the button row beneath |
-| the board | `bw list --all` (text, not `--json`: the JSON is 4 MB with every description and comment inline), ids of the session prefix read off the page; refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
+| the board | `sh -c 'bw list --all --json \| jq -r ".[].id"'`, ids of the session prefix read off the lines; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |
 | a ticket | `$.process.run(['bw', 'show', id, '--json'])` from the session cwd, 20 s timeout; exit 1 with `ambiguous ID ... matches a, b` becomes the candidate list, `no issue found` the missing state |
 | focus | after a submit the ring is put back on the search box with `$.ui.focus`, so the next id can be typed at once |

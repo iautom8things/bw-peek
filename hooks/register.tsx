@@ -11,8 +11,8 @@ import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, pars
 // - Under every reply that mentions an id whose prefix bw's registry knows, or a bare local part
 //   (`c50`, `wxh.5`) that is a ticket on this repo's own board, one dim row of [ id ] buttons; a
 //   press opens the pane on that ticket. This is a render-side decoration: no prompt text, no
-//   CLAUDE.md rule, no tokens. The board's ids come from `bw list --all` once, refreshed when stale
-//   or after a `bw create` / `bw delete` runs through the Bash tool.
+//   CLAUDE.md rule, no tokens. The board's ids come from `bw list --all --json | jq -r '.[].id'`
+//   once, refreshed when stale or after a `bw create` / `bw delete` runs through the Bash tool.
 // - The pane runs `bw show <id> --json` through $.process.run (cross-repo, via ~/.beadwork's
 //   registry) and draws the digest, the title, the description and the comments.
 //
@@ -27,6 +27,12 @@ const SHOW_TIMEOUT_MS = 20_000
 // the board's id list is re-read when a reply is drawn and it is older than this
 const KNOWN_STALE_MS = 2 * 60_000
 const LIST_TIMEOUT_MS = 20_000
+// the board's ids: the JSON contract through jq (one id per line, a few KB), and when that pipeline
+// cannot run (no jq, no sh) the text listing, whose lines carry the id near the front. The JSON
+// itself is not read into the plugin: every description and comment rides along, 4 MB for 500
+// tickets, and $.process.run cuts output at a limit
+const LIST_ARGV: readonly string[] = ['sh', '-c', 'bw list --all --json | jq -r ".[].id"']
+const LIST_TEXT_ARGV: readonly string[] = ['bw', 'list', '--all']
 
 let ready: Promise<void> | undefined
 let matcher: RegExp | undefined
@@ -97,7 +103,11 @@ function refreshKnown($: EngineInterface): Promise<void> {
   const prefix = defaultPrefix
   knownRefresh ??= (async () => {
     try {
-      const r = await $.process.run(['bw', 'list', '--all'], { timeoutMs: LIST_TIMEOUT_MS })
+      let r = await $.process.run(LIST_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
+      if (r.exitCode !== 0 || r.stdout.trim() === '') {
+        log($, `id pipeline failed (exit ${r.exitCode}): ${r.stderr.trim() || 'no output'}; reading the text listing`)
+        r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
+      }
       if (r.exitCode === 0) {
         const ids = parseListIds(r.stdout, prefix)
         const before = known

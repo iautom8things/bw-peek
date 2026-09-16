@@ -24,7 +24,7 @@ function local(len: number): string {
 }
 const boardIds: string[] = []
 while (boardIds.length < 500) boardIds.push(`adf-${local(3)}`)
-const LIST = boardIds.map(id => `○ ${id} P2 a ticket`).join('\n')
+const LIST = boardIds.join('\n')
 
 const FILLER = 'The implementation now handles the worktree bootstrap path'
 function replyText(candidates: number, real: number): string {
@@ -41,7 +41,7 @@ function world(on: On) {
     const argv = [...e.argv]
     if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
     if (argv[1] === 'config') return { value: { exitCode: 0, stdout: 'adf\n', stderr: '' } }
-    if (argv[1] === 'list') return { value: { exitCode: 0, stdout: LIST, stderr: '' } }
+    if (argv[0] === 'sh' || argv[1] === 'list') return { value: { exitCode: 0, stdout: LIST, stderr: '' } }
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected' } }
   })
   on('command.register', async (_, e) => ({ value: { command: e.name } }))

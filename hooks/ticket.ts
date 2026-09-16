@@ -115,8 +115,8 @@ export const STOPWORDS: ReadonlySet<string> = new Set(
   ).split(/\s+/),
 )
 
-// the ids of one board, out of `bw list --all` (one line per issue, the id near the front and any
-// blocker ids after): every `<prefix>-<local>` on the page
+// the ids of one board: every `<prefix>-<local>` on a page, whether the page is jq's one id per line
+// or the text listing (one line per issue, the id near the front and any blocker ids after)
 export function parseListIds(text: string, prefix: string): Set<string> {
   const esc = prefix.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
   const re = new RegExp(`(?<![a-z0-9_-])${esc}-[a-z0-9]{1,8}(?:\\.\\d+)*(?![a-z0-9_-])`, 'gi')

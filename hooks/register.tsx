@@ -1,16 +1,18 @@
 /* @jsx h */
 import type { EngineInterface, Register } from 'claude-code'
 import { drawMentions, drawPane, type Actions, type View } from './draw.tsx'
-import { findMentions, isTicketId, mentionMatcher, normalizeId, parseRegistry, parseShow, type Lookup } from './ticket.ts'
+import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, parseListIds, parseRegistry, parseShow, type Lookup } from './ticket.ts'
 
 // bw-peek: a Beadwork ticket pane inside the session.
 //
 // The agent names tickets by id (adf-c50, think-1pp) and the person reading has no idea what they
 // refer to. This plugin answers that without leaving the terminal:
 // - /bw <id> opens a pane on the ticket; /bw alone opens it with the search box focused.
-// - Under every reply that mentions an id whose prefix bw's registry knows, one dim row of
-//   [ id ] buttons; a press opens the pane on that ticket. This is a render-side decoration: no
-//   prompt text, no CLAUDE.md rule, no tokens.
+// - Under every reply that mentions an id whose prefix bw's registry knows, or a bare local part
+//   (`c50`, `wxh.5`) that is a ticket on this repo's own board, one dim row of [ id ] buttons; a
+//   press opens the pane on that ticket. This is a render-side decoration: no prompt text, no
+//   CLAUDE.md rule, no tokens. The board's ids come from `bw list --all` once, refreshed when stale
+//   or after a `bw create` / `bw delete` runs through the Bash tool.
 // - The pane runs `bw show <id> --json` through $.process.run (cross-repo, via ~/.beadwork's
 //   registry) and draws the digest, the title, the description and the comments.
 //
@@ -22,6 +24,9 @@ const RECENT_CAP = 10
 // a ticket shown again within this window is not re-fetched; Refresh always is
 const FRESH_MS = 30_000
 const SHOW_TIMEOUT_MS = 20_000
+// the board's id list is re-read when a reply is drawn and it is older than this
+const KNOWN_STALE_MS = 2 * 60_000
+const LIST_TIMEOUT_MS = 20_000
 
 let ready: Promise<void> | undefined
 let matcher: RegExp | undefined
@@ -36,7 +41,12 @@ let openComments = new Set<number>()
 let search = ''
 let commandRegistered: Promise<void> | undefined
 
+let known: Known | undefined
+let knownAt = 0
+let knownRefresh: Promise<void> | undefined
+
 let mentionButtons = true
+let bareMentions = true
 let mentionCap = 6
 let collapsedRows = 8
 let digestChars = 50
@@ -79,6 +89,37 @@ function ensureReady($: EngineInterface): Promise<void> {
     }
   })()
   return ready
+}
+
+// the ids on this repo's board, for bare mentions; one run at a time, the old set drawn meanwhile
+function refreshKnown($: EngineInterface): Promise<void> {
+  if (defaultPrefix === undefined || !bareMentions) return Promise.resolve()
+  const prefix = defaultPrefix
+  knownRefresh ??= (async () => {
+    try {
+      const r = await $.process.run(['bw', 'list', '--all'], { timeoutMs: LIST_TIMEOUT_MS })
+      if (r.exitCode === 0) {
+        const ids = parseListIds(r.stdout, prefix)
+        const before = known
+        const changed = before === undefined || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
+        known = { prefix, ids }
+        if (changed) $.ui.invalidate('ui.render')
+      } else log($, `bw list --all failed (exit ${r.exitCode}): ${r.stderr.trim()}`)
+    } catch (err) {
+      log($, `bw list --all failed: ${err}`)
+    } finally {
+      knownAt = await $.clock.now()
+      knownRefresh = undefined
+    }
+  })()
+  return knownRefresh
+}
+
+async function knownIfFresh($: EngineInterface): Promise<Known | undefined> {
+  if (defaultPrefix === undefined || !bareMentions) return undefined
+  if (known === undefined) await refreshKnown($)
+  else if ((await $.clock.now()) - knownAt > KNOWN_STALE_MS) fire($, 'bw list', refreshKnown($))
+  return known
 }
 
 function ensureCommand($: EngineInterface): Promise<void> {
@@ -225,6 +266,7 @@ function clampNumber(v: unknown, lo: number, hi: number, dflt: number): number {
 
 export const register: Register = (on, options) => {
   mentionButtons = options.mention_buttons !== false
+  bareMentions = options.bare_mentions !== false
   mentionCap = clampNumber(options.mention_cap, 1, 20, 6)
   collapsedRows = clampNumber(options.collapsed_rows, 3, 40, 8)
   digestChars = clampNumber(options.digest_chars, 20, 200, 50)
@@ -233,6 +275,17 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     await ensureReady($)
     await ensureCommand($)
+    fire($, 'bw list', refreshKnown($))
+    return r
+  })
+
+  // a ticket made or removed through the Bash tool changes what a bare mention can mean
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const r = await next(e)
+    if (r.result !== undefined && /\bbw\s+(create|delete|import)\b/.test(e.command)) {
+      await ensureReady($)
+      fire($, 'bw list', refreshKnown($))
+    }
     return r
   })
 
@@ -275,7 +328,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (!mentionButtons) return next(e)
     await ensureReady($)
-    const ids = findMentions(e.props.text, matcher)
+    const ids = findMentions(e.props.text, matcher, await knownIfFresh($))
     if (ids.length === 0) return next(e)
     const drawn = await next(e)
     const { Box } = $.ui.resolve(e)

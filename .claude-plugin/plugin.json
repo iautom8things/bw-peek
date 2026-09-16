@@ -12,6 +12,12 @@
       "description": "Draw a row of [ id ] buttons under every reply that mentions a Beadwork ticket",
       "default": true
     },
+    "bare_mentions": {
+      "type": "boolean",
+      "title": "Bare ids under replies",
+      "description": "Also draw a button for a bare id (c50, wxh.5) when it is a ticket on this repo's own board",
+      "default": true
+    },
     "mention_cap": {
       "type": "number",
       "title": "Buttons per reply",

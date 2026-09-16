@@ -8,6 +8,7 @@ import {
   normalizeId,
   parentOf,
   parseDate,
+  parseListIds,
   parseRegistry,
   parseShow,
   parseTicket,
@@ -136,6 +137,35 @@ describe('registry and mentions', () => {
   test('with no prefixes nothing matches', () => {
     expect(mentionMatcher([])).toBeUndefined()
     expect(findMentions('adf-c50', undefined)).toEqual([])
+  })
+
+  test('bare local parts count when they are tickets on the session board, never on another', () => {
+    const m = mentionMatcher(['adf', 'think'])
+    const known = { prefix: 'adf', ids: new Set(['adf-c50', 'adf-wxh.5', 'adf-1jf.234', 'adf-the', 'adf-zu6']) }
+    const text = 'Start with c50, then wxh.5 and 1jf.234; the rest (abc, 999, 1pp) are not tickets here, and think-1pp is another board.'
+    expect(findMentions(text, m, known)).toEqual(['adf-c50', 'adf-wxh.5', 'adf-1jf.234', 'think-1pp'])
+    // a bare id and its full form are one button, in order of first mention
+    expect(findMentions('zu6 then adf-zu6 then c50', m, known)).toEqual(['adf-zu6', 'adf-c50'])
+    // without a board there are no bare mentions
+    expect(findMentions('c50 and wxh.5', m)).toEqual([])
+  })
+
+  test('bare ids stop at word edges, paths, versions and common words', () => {
+    const known = { prefix: 'adf', ids: new Set(['adf-c50', 'adf-draw', 'adf-the', 'adf-tsx', 'adf-2731', 'adf-1jf.2']) }
+    expect(findMentions('hooks/draw.tsx and v2.1.2731 and c50.json and _c50 and c50x', undefined, known)).toEqual([])
+    expect(findMentions('the board', undefined, known)).toEqual([])
+    expect(findMentions('C50, (c50) and `1jf.2`.', undefined, known)).toEqual(['adf-c50', 'adf-1jf.2'])
+  })
+
+  test('parseListIds reads every id of the prefix off the bw list page', () => {
+    const page = [
+      '✓ adf-org P0 [BUG] worktree.mk guard lines [blocks: adf-od4]',
+      '○ adf-wxh.5 P2 S5 follow-up',
+      '○ think-1pp P2 another board',
+      '○ ADF-Zu6 P1 case folded',
+    ].join('\n')
+    expect([...parseListIds(page, 'adf')].sort()).toEqual(['adf-od4', 'adf-org', 'adf-wxh.5', 'adf-zu6'])
+    expect(parseListIds(page, 'spire-cl').size).toBe(0)
   })
 
   test('the longest prefix wins over a shorter one it starts with', () => {

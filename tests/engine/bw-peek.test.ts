@@ -8,6 +8,8 @@ const T0 = Date.parse('2026-09-16T10:00:00')
 const PLUGIN = 'bw-peek'
 
 const REGISTRY = JSON.stringify({ schema_version: 1, repos: { '/a': { prefix: 'adf' }, '/b': { prefix: 'think' } } })
+// the board, as `bw list --all` prints it
+const LIST = ['✓ adf-c50 P1 live-activity [blocks: adf-lxh]', '❄ adf-wxh.5 P2 S5 follow-up', '○ adf-zu6 P1 [BUG] pi-real.sh guard', '○ adf-the P2 a ticket spelt like a word'].join('\n')
 
 const C50 = {
   assignee: '',
@@ -90,7 +92,7 @@ function run($: Engine, args: string) {
 }
 
 // the world: HOME, the registry, `bw config get prefix`, and `bw show` from a table
-function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'adf', stored: Record<string, unknown> = {}) {
+function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'adf', stored: Record<string, unknown> = {}, lists: string[] = []) {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on, stored)
   const calls: string[][] = []
@@ -100,6 +102,7 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'ad
     calls.push(argv)
     if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
     if (argv[0] === 'bw' && argv[1] === 'config') return { value: { exitCode: 0, stdout: `${prefix}\n`, stderr: '' } }
+    if (argv[0] === 'bw' && argv[1] === 'list') return { value: { exitCode: 0, stdout: lists.shift() ?? LIST, stderr: '' } }
     if (argv[0] === 'bw' && argv[1] === 'show') {
       const id = argv[2] as string
       const r = shows[id]
@@ -254,6 +257,24 @@ describe('under a reply', () => {
     const text = textOf(await reply($, 'Closed adf-c50 and adf-c50 again; think-1pp.4 is next, then adf-a1, adf-a2, adf-a3, adf-a4, adf-a5.'))
     expect(text).toContain('Closed adf-c50 and adf-c50 again')
     expect(text).toContain('◈ [adf-c50] [think-1pp.4] [adf-a1] [adf-a2] [adf-a3] [adf-a4] +1 more')
+  })
+
+  test('a bare id that is a ticket on this board gets a button too; other words and other boards do not', async ($, on) => {
+    world(on)
+    const text = textOf(await reply($, 'Closed c50 and wxh.5; the guard in zu6 is next, but abc and 1pp are not ours and c50 repeats.'))
+    expect(text).toContain('◈ [adf-c50] [adf-wxh.5] [adf-zu6]')
+    expect(text).not.toContain('adf-the')
+    expect(text).not.toContain('[adf-abc]')
+  })
+
+  test('a ticket filed through the Bash tool re-reads the board, so the new id lights up', async ($, on) => {
+    const { calls, clock } = world(on, {}, 'adf', {}, [LIST, `${LIST}\n○ adf-q7z P2 just filed`])
+    on('tool.call', { tool: 'Bash' }, async () => ({ result: { stdout: 'created adf-q7z: just filed', stderr: '', interrupted: false } }))
+    expect(textOf(await reply($, 'Filed q7z for this.'))).not.toContain('adf-q7z')
+    await $.tool.call({ tool: 'Bash', command: "bw create 'just filed' -t task", description: 'File a ticket' })
+    await clock.settle()
+    expect(calls.filter(c => c[1] === 'list')).toHaveLength(2)
+    expect(textOf(await reply($, 'Filed q7z for this.', 'msg-2'))).toContain('◈ [adf-q7z]')
   })
 
   test('a reply without a known prefix is left to the engine', async ($, on) => {

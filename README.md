@@ -23,6 +23,17 @@ click opens the pane on that ticket. This is a render-side decoration: the
 model's text is untouched, no rule asks it to format ids, and it costs no
 tokens. Ids with unknown prefixes (`sha-256`, `utf-8`) draw nothing.
 
+Bare ids count too, when they are tickets on the session repo's own board:
+`c50`, `wxh.5`, `1jf.234` (three or four letters and digits, then any `.N`)
+draw as `[ adf-c50 ]` and so on. The board's ids come from `bw list --all`
+(about 50 KB of text for 500 tickets, well under a second), read at session
+start, re-read when a reply is drawn and the list is older than two minutes,
+and right after a `bw create`, `bw delete` or `bw import` runs through the Bash
+tool. A bare id never reaches another board: it has no way to say which one it
+means. A short stoplist of common three- and four-letter words (`the`, `and`,
+`with`, `json`, ...) is skipped even if a ticket happens to spell one; that
+ticket is still one `/bw adf-the` away.
+
 **The pane.** Opened by a mention button, by `/bw <id>`, or by `/bw` alone with
 the search box focused. Docked beside the transcript from 110 columns, inline
 above the prompt below that. Escape closes it; `ctrl+x tab` focuses it.
@@ -85,6 +96,7 @@ Set under `pluginConfigs["bw-peek@skills-dir"].options` in the user
 | field             | type    | default | meaning                                                      |
 | ----------------- | ------- | ------- | ------------------------------------------------------------ |
 | `mention_buttons` | boolean | `true`  | draw the `[ id ]` row under replies that mention tickets      |
+| `bare_mentions`   | boolean | `true`  | also light up bare ids (`c50`) that are tickets on this board |
 | `mention_cap`     | number  | `6`     | most ids drawn under one reply before `+N more` (1 to 20)     |
 | `collapsed_rows`  | number  | `8`     | description rows shown before `[ Show all ]` (3 to 40)        |
 | `digest_chars`    | number  | `50`    | characters of each comment before its `[ + ]` (20 to 200)     |
@@ -94,7 +106,8 @@ Set under `pluginConfigs["bw-peek@skills-dir"].options` in the user
 | piece | mechanism |
 | --- | --- |
 | prefixes | `cat $HOME/.beadwork/registry.json` at session start (and after a hot reload), `repos.*.prefix`; the session repo's own prefix from `bw config get prefix` is added |
-| mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded; the engine's own drawing is wrapped in a column with the button row beneath |
+| mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the board's id set; the engine's own drawing is wrapped in a column with the button row beneath |
+| the board | `bw list --all` (text, not `--json`: the JSON is 4 MB with every description and comment inline), ids of the session prefix read off the page; refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |
 | a ticket | `$.process.run(['bw', 'show', id, '--json'])` from the session cwd, 20 s timeout; exit 1 with `ambiguous ID ... matches a, b` becomes the candidate list, `no issue found` the missing state |
 | focus | after a submit the ring is put back on the search box with `$.ui.focus`, so the next id can be typed at once |

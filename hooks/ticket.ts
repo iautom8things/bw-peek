@@ -97,16 +97,56 @@ export function mentionMatcher(prefixes: readonly string[]): RegExp | undefined 
   return new RegExp(`(?<![a-z0-9_-])(?:${alts})-${LOCAL_MENTIONED}(?![a-z0-9_-])`, 'gi')
 }
 
-// the distinct ids a text mentions, in order of first mention
-export function findMentions(text: string, matcher: RegExp | undefined): string[] {
-  if (matcher === undefined) return []
+// a bare local part as the agent writes one without its prefix: `c50`, `wxh.5`, `1jf.234`. Three or
+// four letters and digits, then any number of `.N`. Not preceded by a letter, digit, `_`, `.`, `-` or
+// `/`, not followed by one of those, and not followed by `.` and a letter (`draw.tsx`).
+const BARE_RE = /(?<![a-z0-9_./-])[a-z0-9]{3,4}(?:\.\d+)*(?![a-z0-9_-])(?!\.[a-z])/gi
+
+// three- and four-letter words a base-36 id could spell; a ticket with one of these as its id is
+// still reachable by its full id, but bare it would light up every reply
+export const STOPWORDS: ReadonlySet<string> = new Set(
+  (
+    'the and for are but not you all can had her was one our out day get has him his how man new now old see two way who boy did its let put say she too use ' +
+    'also back been best both call came come does done down each even ever fail find from give goes gone good have here home into just keep kind know last left ' +
+    'life like line list live long look made make many mean more most much must name need next none once only open over part past read real said same seen ' +
+    'send show side some soon sort step such sure take tell test than that them then they this time told took true turn type upon used user very want week ' +
+    'well went were what when will with word work year your bash json main null void file path repo code diff node port host data text ' +
+    'run add fix set top end log err api cli ssh git dev prod tmp bin lib src doc pkg app web dir cwd env var const'
+  ).split(/\s+/),
+)
+
+// the ids of one board, out of `bw list --all` (one line per issue, the id near the front and any
+// blocker ids after): every `<prefix>-<local>` on the page
+export function parseListIds(text: string, prefix: string): Set<string> {
+  const esc = prefix.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
+  const re = new RegExp(`(?<![a-z0-9_-])${esc}-[a-z0-9]{1,8}(?:\\.\\d+)*(?![a-z0-9_-])`, 'gi')
+  const out = new Set<string>()
+  for (const m of text.matchAll(re)) out.add(m[0].toLowerCase())
+  return out
+}
+
+export type Known = { prefix: string; ids: ReadonlySet<string> }
+
+// the distinct ids a text mentions, in order of first mention: full ids with a known prefix, and bare
+// local parts that are tickets on the session's own board (never another board's; a bare id has no
+// way to say which)
+export function findMentions(text: string, matcher: RegExp | undefined, known?: Known): string[] {
+  const hits: { at: number; id: string }[] = []
+  if (matcher !== undefined) for (const m of text.matchAll(matcher)) hits.push({ at: m.index, id: m[0].toLowerCase() })
+  if (known !== undefined && known.ids.size > 0)
+    for (const m of text.matchAll(BARE_RE)) {
+      const word = m[0].toLowerCase()
+      if (STOPWORDS.has(word)) continue
+      const id = `${known.prefix}-${word}`
+      if (known.ids.has(id)) hits.push({ at: m.index, id })
+    }
+  hits.sort((a, b) => a.at - b.at)
   const seen = new Set<string>()
   const out: string[] = []
-  for (const m of text.matchAll(matcher)) {
-    const id = m[0].toLowerCase()
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
+  for (const h of hits) {
+    if (seen.has(h.id)) continue
+    seen.add(h.id)
+    out.push(h.id)
   }
   return out
 }

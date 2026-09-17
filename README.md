@@ -5,6 +5,8 @@ A Beadwork ticket viewer inside Claude Code. The agent names tickets by id
 without opening another terminal and running `bw show`. This plugin puts the
 ticket one keypress or one click away, in a pane beside the transcript.
 
+![bw-peek: ticket buttons under a reply, and the pane they open](docs/bw-peek.gif)
+
 Nothing here writes to bw.
 
 ## Install

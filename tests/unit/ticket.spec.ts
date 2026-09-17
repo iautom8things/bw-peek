@@ -9,14 +9,17 @@ import {
   normalizeId,
   parentOf,
   parseDate,
+  parseChildren,
   parseListIds,
   parseRegistry,
+  parseRegistryPaths,
   parseShow,
   parseTicket,
   relativeDays,
   firstRows,
   layoutRows,
   piecesOf,
+  prefixOf,
   rowText,
   sortIds,
   statusOf,
@@ -310,5 +313,31 @@ describe('layout with inline ids', () => {
     expect(rowText(cut.shown[3] as Row)).toMatch(/…$/)
     expect(cut.hidden).toBe(rows.length - 4)
     expect(firstRows(layoutRows('short', 20), 4, 20)).toEqual({ shown: [[{ kind: 'text', text: 'short' }]], hidden: 0 })
+  })
+})
+
+describe('children', () => {
+  const kid = (id: string, status = 'open') => ({ id, title: `title of ${id}`, status, priority: 1, blocked_by: [] })
+
+  test('rows of bw list --parent become tickets in counting order, whole or slimmed', () => {
+    const kids = parseChildren(JSON.stringify([kid('adf-utl.10'), kid('adf-utl.2', 'closed'), kid('adf-utl.1')]))
+    expect(kids.map(k => k.id)).toEqual(['adf-utl.1', 'adf-utl.2', 'adf-utl.10'])
+    expect(kids[1]?.status).toBe('closed')
+    expect(kids[0]?.description).toBe('')
+  })
+
+  test('null (no children), an object, and noise are all no children', () => {
+    expect(parseChildren('null')).toEqual([])
+    expect(parseChildren('{"id":"adf-x"}')).toEqual([])
+    expect(parseChildren('error: beadwork not initialized')).toEqual([])
+    expect(parseChildren(JSON.stringify([{ nope: true }, kid('adf-a.1')])).map(k => k.id)).toEqual(['adf-a.1'])
+  })
+
+  test('the registry maps a prefix to its repo paths; an id takes its longest registered prefix', () => {
+    const paths = parseRegistryPaths(JSON.stringify({ repos: { '/a': { prefix: 'adf' }, '/b': { prefix: 'think' }, '/b2': { prefix: 'think' }, '/c': { prefix: 'Bad Prefix' } } }))
+    expect(paths).toEqual({ adf: ['/a'], think: ['/b', '/b2'] })
+    expect(parseRegistryPaths('not json')).toEqual({})
+    expect(prefixOf('spire-cl-0aa', ['spire', 'spire-cl'])).toBe('spire-cl')
+    expect(prefixOf('adf-c50', ['think'])).toBeUndefined()
   })
 })

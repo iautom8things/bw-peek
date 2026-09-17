@@ -27,7 +27,9 @@ export type Ticket = {
 
 // what one `bw show` came back as
 export type Lookup =
-  | { kind: 'ticket'; id: string; ticket: Ticket; at: number }
+  // `children` lands after the ticket: bw show's JSON names a parent on the child and nothing on the
+  // parent, so they come from a second call (absent until it answers)
+  | { kind: 'ticket'; id: string; ticket: Ticket; children?: Ticket[]; at: number }
   | { kind: 'ambiguous'; id: string; candidates: string[]; at: number }
   | { kind: 'missing'; id: string; at: number }
   | { kind: 'error'; id: string; message: string; at: number }
@@ -192,6 +194,43 @@ export function parseTicket(json: unknown): Ticket | undefined {
     blockedBy: strList(j.blocked_by),
     blocks: strList(j.blocks),
     comments,
+  }
+}
+
+// prefix → the repo paths bw's registry files it under (two clones can share one)
+export function parseRegistryPaths(json: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  try {
+    const parsed = JSON.parse(json) as { repos?: Record<string, { prefix?: unknown }> }
+    for (const [path, entry] of Object.entries(parsed.repos ?? {})) {
+      const p = entry?.prefix
+      if (typeof p === 'string' && new RegExp(`^${PREFIX}$`).test(p)) (out[p] ??= []).push(path)
+    }
+  } catch {
+    // an unreadable registry names no repos
+  }
+  return out
+}
+
+// the registered prefix an id starts with, longest first (`spire-cl-0aa` is `spire-cl`, not `spire`)
+export function prefixOf(id: string, prefixes: readonly string[]): string | undefined {
+  let best: string | undefined
+  for (const p of prefixes) if (id.startsWith(`${p}-`) && (best === undefined || p.length > best.length)) best = p
+  return best
+}
+
+// `bw list --parent <id> --all --json`, whole or slimmed by jq: the children in id order. bw prints
+// `null` for a ticket without any
+export function parseChildren(stdout: string): Ticket[] {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map(parseTicket)
+      .filter((t): t is Ticket => t !== undefined)
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+  } catch {
+    return []
   }
 }
 

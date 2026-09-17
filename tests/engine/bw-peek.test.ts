@@ -100,6 +100,8 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
   mock.store(on, stored)
   const calls: string[][] = []
   const logs: unknown[] = []
+  // children by parent id, filled by a test before it opens the parent
+  const kids: Record<string, unknown[]> = {}
   const NO_BOARD = { exitCode: 1, stdout: '', stderr: 'error: beadwork not initialized. Run: bw init\n' }
   on('env.get', async () => ({ value: '/home/mz' }))
   on('process.run', async (_, e) => {
@@ -109,6 +111,15 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
     if (argv[0] === 'bw' && argv[1] === 'config') {
       const p = typeof prefix === 'string' ? prefix : prefix.current
       return { value: p === undefined ? NO_BOARD : { exitCode: 0, stdout: `${p}\n`, stderr: '' } }
+    }
+    // the children of a ticket: `sh -c 'bw [-C "$2"] list --parent "$1" ... | jq' sh <id> [<dir>]`
+    if (argv[0] === 'sh' && argv[2]?.includes('list --parent')) {
+      if (noJq) return { value: { exitCode: 127, stdout: '', stderr: 'sh: jq: command not found' } }
+      return { value: { exitCode: 0, stdout: JSON.stringify(kids[argv[4] as string] ?? []), stderr: '' } }
+    }
+    if (argv[0] === 'bw' && argv.includes('--parent')) {
+      const id = argv[argv.indexOf('--parent') + 1] as string
+      return { value: { exitCode: 0, stdout: JSON.stringify(kids[id] ?? null), stderr: '' } }
     }
     if (argv[0] === 'sh' && argv[2]?.startsWith('bw list --all --json | jq')) {
       if (noBoard) return { value: { ...NO_BOARD, exitCode: 0 } } // jq exits 0 on empty input; no pipefail
@@ -136,7 +147,7 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
   // the engine's own drawing of a reply: its text in a Box
   on('ui.render', async (_, e) => ({ type: 'Box', children: [e.component === 'AssistantMessage' ? (e.props as { text: string }).text : ''] }))
   on('command.run', async () => ({}))
-  return { clock, calls, logs }
+  return { clock, calls, logs, kids }
 }
 
 const ok = (t: unknown): Run => ({ exitCode: 0, stdout: JSON.stringify(t), stderr: '' })
@@ -207,6 +218,49 @@ describe('the pane', () => {
     expect(text).toContain('Description 1 row')
     expect(text).not.toContain('[Show all]')
     expect(text).toContain('Comments (none)')
+  })
+
+  test('a parent lists its children under the relations: glyph, priority, id button, title; a press opens one', async ($, on) => {
+    const kid = (id: string, status: string, title: string) => ({ id, title, status, priority: 1, blocked_by: [] })
+    const { calls, kids, clock } = world(on, { 'adf-c50': ok(C50), 'adf-c50.2': ok({ ...C50, id: 'adf-c50.2', title: 'second child', parent: 'adf-c50' }) })
+    kids['adf-c50'] = [kid('adf-c50.10', 'open', 'tenth'), kid('adf-c50.2', 'closed', 'second child'), kid('adf-c50.1', 'in_progress', 'first child')]
+    await run($, 'adf-c50')
+    // this repo's own ticket: listed from the cwd, no -C
+    expect(calls.find(c => c[0] === 'sh' && c[2]?.includes('list --parent'))?.slice(3)).toEqual(['sh', 'adf-c50'])
+    const text = textOf(await pane($))
+    expect(text).toContain('Children 3 1 closed')
+    expect(text).toContain('◐ P1 [adf-c50.1] first child ✓ P1 [adf-c50.2] second child ○ P1 [adf-c50.10] tenth')
+    expect(text.indexOf('Children')).toBeLessThan(text.indexOf('Description'))
+    await $.ui.press({ plugin: PLUGIN, key: 'child-adf-c50.2', requestId: 'bw' })
+    await clock.settle()
+    const child = textOf(await pane($))
+    expect(child).toContain('second child')
+    expect(child).toContain('parent [adf-c50]')
+    expect(child).not.toContain('Children')
+  })
+
+  test('another repo\'s ticket lists its children with -C <that repo>, from the registry; more than the cap folds', async ($, on) => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ id: `think-1pp.${i + 1}`, title: `step ${i + 1}`, status: 'open', priority: 2, blocked_by: [] }))
+    const { calls, kids } = world(on, { 'think-1pp': ok({ ...C50, id: 'think-1pp', title: 'a plan' }) })
+    kids['think-1pp'] = many
+    await run($, 'think-1pp')
+    expect(calls.find(c => c[0] === 'sh' && c[2]?.includes('list --parent'))?.slice(3)).toEqual(['sh', 'think-1pp', '/b'])
+    const folded = textOf(await pane($))
+    expect(folded).toContain('Children 11 0 closed [Show all]')
+    expect(folded).toContain('[think-1pp.8] step 8 … 3 more children')
+    expect(folded).not.toContain('[think-1pp.9]')
+    await $.ui.press({ plugin: PLUGIN, key: 'children-toggle', requestId: 'bw' })
+    const open = textOf(await pane($))
+    expect(open).toContain('[think-1pp.11] step 11')
+    expect(open).toContain('[Collapse]')
+  })
+
+  test('without jq the children come from the whole rows', async ($, on) => {
+    const { calls, kids } = world(on, { 'adf-c50': ok(C50) }, 'adf', {}, [], true)
+    kids['adf-c50'] = [{ id: 'adf-c50.1', title: 'only child', status: 'open', priority: 3, blocked_by: [], description: 'long', comments: [] }]
+    await run($, 'adf-c50')
+    expect(calls).toContainEqual(['bw', 'list', '--parent', 'adf-c50', '--all', '--json'])
+    expect(textOf(await pane($))).toContain('○ P3 [adf-c50.1] only child')
   })
 
   test('an ambiguous id lists candidates as buttons, and pressing one opens it', async ($, on) => {

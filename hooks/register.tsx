@@ -1,7 +1,7 @@
 /* @jsx h */
 import type { EngineInterface, Register } from 'claude-code'
 import { drawMentions, drawPane, type Actions, type View } from './draw.tsx'
-import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, parseListIds, parseRegistry, parseShow, type Lookup } from './ticket.ts'
+import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, parseChildren, parseListIds, parseRegistry, parseRegistryPaths, parseShow, prefixOf, type Lookup, type Ticket } from './ticket.ts'
 
 // bw-peek: a Beadwork ticket pane inside the session.
 //
@@ -38,6 +38,7 @@ const LIST_TEXT_ARGV: readonly string[] = ['bw', 'list', '--all']
 let ready: Promise<void> | undefined
 let matcher: RegExp | undefined
 let prefixes: string[] = []
+let repoPaths: Record<string, string[]> = {}
 let defaultPrefix: string | undefined
 let recent: string[] = []
 let current: string | undefined
@@ -45,6 +46,7 @@ const lookups: Record<string, Lookup> = {}
 const pending = new Set<string>()
 let paneOpen = false
 let descriptionExpanded = false
+let childrenExpanded = false
 let openComments = new Set<number>()
 let search = ''
 let commandRegistered: Promise<void> | undefined
@@ -92,7 +94,10 @@ function ensureReady($: EngineInterface): Promise<void> {
       const home = await $.env.get('HOME')
       if (home !== undefined && home !== '') {
         const r = await $.process.run(['cat', `${home}/.beadwork/registry.json`], { timeoutMs: 5000 })
-        if (r.exitCode === 0) prefixes.push(...parseRegistry(r.stdout))
+        if (r.exitCode === 0) {
+          prefixes.push(...parseRegistry(r.stdout))
+          repoPaths = parseRegistryPaths(r.stdout)
+        }
         else log($, `registry unreadable (exit ${r.exitCode}): ${r.stderr.trim()}`)
       }
     } catch (err) {
@@ -207,6 +212,35 @@ function closePane($: EngineInterface): void {
   $.ui.close({ id: PANE_ID }).catch(err => log($, `pane close failed: ${err}`))
 }
 
+// the tickets filed under `id`. bw show's JSON names the parent on a child and nothing on the parent
+// (its text view computes the list), so this is a second call. `bw list` reads the cwd's board only,
+// where `bw show` goes through the registry: a ticket of another repo is listed with -C <its path>,
+// when the registry names exactly one. jq keeps each child's description and comments out of the
+// output; without jq the whole rows are read.
+async function listChildren($: EngineInterface, id: string): Promise<Ticket[]> {
+  const prefix = prefixOf(id, prefixes)
+  let dir: string | undefined
+  if (prefix !== defaultPrefix) {
+    const paths = prefix === undefined ? [] : repoPaths[prefix] ?? []
+    if (paths.length !== 1) return []
+    dir = paths[0]
+  }
+  const slim = 'jq -c "[.[] | {id, title, status, priority, blocked_by}]"'
+  try {
+    let r = await $.process.run(
+      dir === undefined
+        ? ['sh', '-c', `bw list --parent "$1" --all --json | ${slim}`, 'sh', id]
+        : ['sh', '-c', `bw -C "$2" list --parent "$1" --all --json | ${slim}`, 'sh', id, dir],
+      { timeoutMs: SHOW_TIMEOUT_MS },
+    )
+    if (r.exitCode !== 0 || r.stdout.trim() === '')
+      r = await $.process.run(['bw', ...(dir === undefined ? [] : ['-C', dir]), 'list', '--parent', id, '--all', '--json'], { timeoutMs: SHOW_TIMEOUT_MS })
+    return r.exitCode === 0 ? parseChildren(r.stdout) : []
+  } catch {
+    return []
+  }
+}
+
 async function fetch($: EngineInterface, id: string): Promise<void> {
   if (pending.has(id)) return
   pending.add(id)
@@ -214,7 +248,14 @@ async function fetch($: EngineInterface, id: string): Promise<void> {
   const at = await $.clock.now()
   try {
     const r = await $.process.run(['bw', 'show', id, '--json'], { timeoutMs: SHOW_TIMEOUT_MS })
-    lookups[id] = parseShow(id, r, at)
+    const found = parseShow(id, r, at)
+    lookups[id] = found
+    if (found.kind === 'ticket') {
+      // the ticket draws now; its children join it when the list answers (bw resolved a partial id,
+      // so the list is asked by the ticket's own)
+      $.ui.invalidate('ui.render')
+      lookups[id] = { ...found, children: await listChildren($, found.ticket.id) }
+    }
   } catch (err) {
     lookups[id] = { kind: 'error', id, message: `bw show ${id} failed: ${err}`, at }
   } finally {
@@ -228,6 +269,7 @@ async function show($: EngineInterface, id: string, force = false): Promise<void
   await ensureReady($)
   if (current !== id) {
     descriptionExpanded = false
+    childrenExpanded = false
     openComments = new Set()
   }
   current = id
@@ -281,6 +323,10 @@ function actionsFor($: EngineInterface): Actions {
       descriptionExpanded = !descriptionExpanded
       $.ui.invalidate('ui.render')
     },
+    toggleChildren: () => {
+      childrenExpanded = !childrenExpanded
+      $.ui.invalidate('ui.render')
+    },
     toggleComment: i => {
       if (openComments.has(i)) openComments.delete(i)
       else openComments.add(i)
@@ -301,6 +347,7 @@ async function viewOf($: EngineInterface): Promise<View> {
     lookup: current === undefined ? undefined : lookups[current],
     pending: current !== undefined && pending.has(current),
     descriptionExpanded,
+    childrenExpanded,
     openComments,
     recent,
     search,

@@ -37,6 +37,7 @@ export type Actions = {
   refresh: () => void
   close: () => void
   toggleDescription: () => void
+  toggleChildren: () => void
   toggleComment: (index: number) => void
   forgetRecent: () => void
 }
@@ -48,6 +49,7 @@ export type View = {
   // a fetch for `current` is in flight
   pending: boolean
   descriptionExpanded: boolean
+  childrenExpanded: boolean
   openComments: ReadonlySet<number>
   recent: readonly string[]
   // the search field's text, as the person has typed it
@@ -222,6 +224,44 @@ function relations(els: Els, t: Ticket, actions: Actions): RenderElement | null 
   )
 }
 
+// the tickets filed under this one, as bw's text view lists them: status, priority, id, title
+function children(els: Els, kids: readonly Ticket[], v: View, columns: number, actions: Actions): RenderElement | null {
+  const { Box, Text, Button } = els
+  if (kids.length === 0) return null
+  const closed = kids.filter(k => k.status === 'closed').length
+  const collapsible = kids.length > v.collapsedRows
+  const shown = collapsible && !v.childrenExpanded ? kids.slice(0, v.collapsedRows) : kids
+  const control = collapsible ? (
+    <Button key="children-toggle" label={v.childrenExpanded ? 'Collapse' : 'Show all'} dimColor onPress={actions.toggleChildren} />
+  ) : null
+  return (
+    <Box flexDirection="column">
+      {sectionTitle(els, 'Children', `${kids.length}  ${closed} closed`, control)}
+      <Box marginLeft={2} flexDirection="column">
+        {shown.map(k => {
+          const st = statusOf(k)
+          // glyph, priority, the button's brackets and the gaps between them
+          const room = Math.max(8, columns - 2 - (2 + 3 + k.id.length + 4 + 2))
+          const title = k.title.length > room ? `${k.title.slice(0, room - 1)}…` : k.title
+          return (
+            <Box key={`child-${k.id}`} flexDirection="row">
+              <Box marginRight={1} flexShrink={0}>
+                <Text color={st.color} dimColor={st.dim}>{st.glyph}</Text>
+              </Box>
+              <Box marginRight={1} flexShrink={0}>
+                <Text color={PRIORITY_COLOR[k.priority] ?? 'white'}>{`P${k.priority}`}</Text>
+              </Box>
+              {idButton(els, k.id, actions, 'child', false)}
+              <Text dimColor={k.status === 'closed'}>{title}</Text>
+            </Box>
+          )
+        })}
+        {shown.length < kids.length ? <Text dimColor>{`… ${plural(kids.length - shown.length, 'more child', 'more children')}`}</Text> : null}
+      </Box>
+    </Box>
+  )
+}
+
 function description(els: Els, t: Ticket, v: View, columns: number, actions: Actions): RenderElement {
   const { Box, Text, Button } = els
   const body = t.description.trim()
@@ -294,6 +334,7 @@ function ticketView(els: Els, t: Ticket, v: View, columns: number, actions: Acti
           {paragraph(els, layoutRows(`↳ ${t.closeReason.trim()}`, columns, v.matcher, v.known), 'why', actions, 'green')}
         </Box>
       )}
+      {children(els, v.lookup?.kind === 'ticket' ? v.lookup.children ?? [] : [], v, columns, actions)}
       {description(els, t, v, columns, actions)}
       {comments(els, t, v, columns, actions)}
     </Box>

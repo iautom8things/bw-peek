@@ -91,6 +91,11 @@ esc closes · type an id and press enter · /bw <id> from the prompt
 - The title in bold, wrapped.
 - Relations as buttons: `parent`, `blocked by`, `blocks`. A press opens that
   ticket; `recent` at the bottom is the trail back.
+- Children, for a ticket that has any: a count with how many are closed, then
+  one row each as bw's text view lists them, `◐ P1 [ adf-utl.1 ] title`, in
+  counting order (`.2` before `.10`). A press opens the child, whose `parent`
+  button is the way back. More than the collapsed-row count fold behind
+  `[ Show all ]`.
 - The close reason, when the ticket has one.
 - The description, collapsed to its first rows with `[ Show all ]` /
   `[ Collapse ]`. Rows are counted as drawn (word-wrapped at the pane's width),
@@ -168,6 +173,7 @@ the config menu.
 | the board | `sh -c 'bw list --all --json \| jq -r ".[].id"'`, ids of the session prefix read off the lines; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |
 | a ticket | `$.process.run(['bw', 'show', id, '--json'])` from the session cwd, 20 s timeout; exit 1 with `ambiguous ID ... matches a, b` becomes the candidate list, `no issue found` the missing state |
+| children | `bw show --json` names the parent on a child and nothing on the parent (the text view computes the list), so once the ticket lands a second call runs: `sh -c 'bw list --parent "$1" --all --json \| jq -c "[.[] \| {id, title, status, priority, blocked_by}]"'`, the whole rows without jq. `bw list` reads the cwd's board only, where `bw show` goes through the registry, so a ticket of another repo is listed with `bw -C <path>` when the registry names exactly one path for its prefix. The ticket draws first; the children join it when the list answers |
 | focus | after a submit the ring is put back on the search box with `$.ui.focus`, so the next id can be typed at once |
 
 `hooks/ticket.ts` is the pure part (ids, mentions, JSON parsing, digest, time,

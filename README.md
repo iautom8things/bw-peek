@@ -5,8 +5,26 @@ A Beadwork ticket viewer inside Claude Code. The agent names tickets by id
 without opening another terminal and running `bw show`. This plugin puts the
 ticket one keypress or one click away, in a pane beside the transcript.
 
-Function hooks (Claude Code 2.1.270+) with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`
-in the claude process's environment. Nothing here writes to bw.
+Nothing here writes to bw.
+
+## Install
+
+Needs [Beadwork](https://github.com/jallum/beadwork) (`bw` on PATH), Claude
+Code 2.1.270 or newer, and function hooks turned on: export
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment that launches
+`claude`, or the hooks module is ignored without a word. `jq` is optional and
+makes the board list cheaper.
+
+This repo is the plugin and its own marketplace, so from any session:
+
+```
+/plugin marketplace add iautom8things/bw-peek
+/plugin install bw-peek@bw-peek
+```
+
+or from a shell, `claude plugin marketplace add iautom8things/bw-peek` then
+`claude plugin install bw-peek@bw-peek`. Restart the session and `/bw` is there.
+To try it without installing, clone and run `claude --plugin-dir ./bw-peek`.
 
 ## What it draws
 
@@ -119,8 +137,9 @@ resolving leaves. Ten ids, in the plugin store across sessions.
 
 ## Config
 
-Set under `pluginConfigs["bw-peek@skills-dir"].options` in the user
-`settings.json`, or from the config menu.
+Set under `pluginConfigs["bw-peek@bw-peek"].options` in the user
+`settings.json` (the key is the plugin id, `<plugin>@<marketplace>`), or from
+the config menu.
 
 | field             | type    | default | meaning                                                      |
 | ----------------- | ------- | ------- | ------------------------------------------------------------ |
@@ -149,17 +168,21 @@ engine call.
 ## Develop
 
 ```sh
-claude --plugin-dir llms/skills/bw-peek          # load from disk; edits hot-reload
-claude plugin validate llms/skills/bw-peek       # what the module hooks and calls
-cd llms/skills/bw-peek
+claude --plugin-dir .                            # load from disk; edits hot-reload
+claude plugin validate .                         # what the module hooks and calls
 bun test tests/unit                              # ids, mentions, parsing, digest, wrap
 claude plugin test .                             # pane and mention row through the engine's $, bw mocked by argv; tests/perf bounds the redraw cost
 bun run tests/perf/mentions.bench.ts             # µs per scan at 100 and 1000 candidates
 bunx -p typescript tsc -p . && rm -f bun.lock package.json
 ```
 
+CI runs the first four on every push (`.github/workflows/test.yml`); none of
+them needs a logged-in session.
+
 Type checking needs the generated declarations: in a session with function
 hooks on, run `/plugin-types .claude/types` from this folder (git-ignored).
+The API is early access and moves between Claude Code releases; regenerate
+rather than edit.
 
 Notes from the build, on 2.1.273:
 
@@ -174,3 +197,7 @@ Notes from the build, on 2.1.273:
 - In `claude plugin test`, `ui.focus` is an event answered with `{}`, not an
   op answered with `{ value }`; `$.store` is not on the test's `$`, so the
   recent list is seeded through `mock.store(on, entries)` instead.
+
+## License
+
+MIT.

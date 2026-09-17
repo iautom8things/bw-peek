@@ -1,0 +1,6 @@
+# /plugin-types output; regenerate per Claude Code build
+.claude/types/
+# left behind by `bunx -p typescript tsc`
+bun.lock
+package.json
+node_modules/

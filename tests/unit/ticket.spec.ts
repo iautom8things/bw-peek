@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import type { Row } from '../../hooks/ticket.ts'
+import type { Board, Known, Row } from '../../hooks/ticket.ts'
 import {
   ago,
   findMentions,
   idParts,
   isTicketId,
   mentionMatcher,
+  mentionedPrefixes,
   normalizeId,
   parentOf,
   parseDate,
@@ -27,6 +28,13 @@ import {
 
 const T0 = new Date('2026-09-16T10:00:00').getTime()
 const DAY = 86_400_000
+
+// what is known with the session on `prefix`: that board's ids, and any other boards by prefix
+function knownOn(prefix: string, ids: string[], others: Record<string, string[] | 'unreadable'> = {}): Known {
+  const boards = new Map<string, Board>([[prefix, new Set(ids)]])
+  for (const [p, b] of Object.entries(others)) boards.set(p, b === 'unreadable' ? b : new Set(b))
+  return { prefix, boards }
+}
 
 const SHOWN = {
   assignee: '',
@@ -147,7 +155,7 @@ describe('registry and mentions', () => {
 
   test('bare local parts count when they are tickets on the session board, never on another', () => {
     const m = mentionMatcher(['adf', 'think'])
-    const known = { prefix: 'adf', ids: new Set(['adf-c50', 'adf-wxh.5', 'adf-1jf.234', 'adf-the', 'adf-zu6']) }
+    const known = knownOn('adf', ['adf-c50', 'adf-wxh.5', 'adf-1jf.234', 'adf-the', 'adf-zu6'], { think: ['think-1pp'] })
     const text = 'Start with c50, then wxh.5 and 1jf.234; the rest (abc, 999, 1pp) are not tickets here, and think-1pp is another board.'
     expect(findMentions(text, m, known)).toEqual(['adf-c50', 'adf-wxh.5', 'adf-1jf.234', 'think-1pp'])
     // a bare id and its full form are one button, in order of first mention
@@ -157,10 +165,28 @@ describe('registry and mentions', () => {
   })
 
   test('bare ids stop at word edges, paths, versions and common words', () => {
-    const known = { prefix: 'adf', ids: new Set(['adf-c50', 'adf-draw', 'adf-the', 'adf-tsx', 'adf-2731', 'adf-1jf.2']) }
+    const known = knownOn('adf', ['adf-c50', 'adf-draw', 'adf-the', 'adf-tsx', 'adf-2731', 'adf-1jf.2'])
     expect(findMentions('hooks/draw.tsx and v2.1.2731 and c50.json and _c50 and c50x', undefined, known)).toEqual([])
     expect(findMentions('the board', undefined, known)).toEqual([])
     expect(findMentions('C50, (c50) and `1jf.2`.', undefined, known)).toEqual(['adf-c50', 'adf-1jf.2'])
+  })
+
+  test('a full id counts only when it is on its board: prose shaped like an id is not a mention', () => {
+    const m = mentionMatcher(['pm', 'think'])
+    const text = 'PM-G is pm-x21.9. PM-G and PM-H are the two PM-internal pieces; PM-G ships after PM-1a merges. See think-1pp.'
+    // the shape alone reads three ids out of this
+    expect(findMentions(text, m)).toEqual(['pm-x21.9', 'pm-internal', 'pm-1a', 'think-1pp'])
+    expect(mentionedPrefixes(text, m)).toEqual(['pm', 'think'])
+    // a board not read yet holds its ids back
+    expect(findMentions(text, m, { prefix: '', boards: new Map() })).toEqual([])
+    const known = knownOn('pm', ['pm-x21', 'pm-x21.9'])
+    expect(findMentions(text, m, known)).toEqual(['pm-x21.9'])
+    // a board bw cannot list has nothing to check against, so the shape decides
+    expect(findMentions(text, m, knownOn('pm', ['pm-x21.9'], { think: 'unreadable' }))).toEqual(['pm-x21.9', 'think-1pp'])
+    expect(piecesOf('the PM-internal pieces of pm-x21.9', m, known)).toEqual([
+      { kind: 'text', text: 'the PM-internal pieces of ' },
+      { kind: 'id', id: 'pm-x21.9', text: 'pm-x21.9' },
+    ])
   })
 
   test('parseListIds reads every id of the prefix off the bw list page', () => {
@@ -275,7 +301,7 @@ describe('time', () => {
 
 describe('layout with inline ids', () => {
   const m = mentionMatcher(['adf', 'think'])
-  const known = { prefix: 'adf', ids: new Set(['adf-lxh', 'adf-zu6', 'adf-c50']) }
+  const known = knownOn('adf', ['adf-lxh', 'adf-zu6', 'adf-c50'])
 
   test('piecesOf splits a line around full and bare ids, keeping the text as written', () => {
     expect(piecesOf('see `adf-lxh` and zu6.', m, known)).toEqual([

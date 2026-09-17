@@ -1,18 +1,20 @@
 /* @jsx h */
 import type { EngineInterface, Register } from 'claude-code'
 import { drawMentions, drawPane, type Actions, type View } from './draw.tsx'
-import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, parseChildren, parseListIds, parseRegistry, parseRegistryPaths, parseShow, prefixOf, type Lookup, type Ticket } from './ticket.ts'
+import { type Board, findMentions, isTicketId, type Known, mentionMatcher, mentionedPrefixes, normalizeId, parseChildren, parseListIds, parseRegistry, parseRegistryPaths, parseShow, prefixOf, type Lookup, type Ticket } from './ticket.ts'
 
 // bw-peek: a Beadwork ticket pane inside the session.
 //
 // The agent names tickets by id (adf-c50, think-1pp) and the person reading has no idea what they
 // refer to. This plugin answers that without leaving the terminal:
 // - /bw <id> opens a pane on the ticket; /bw alone opens it with the search box focused.
-// - Under every reply that mentions an id whose prefix bw's registry knows, or a bare local part
-//   (`c50`, `wxh.5`) that is a ticket on this repo's own board, one dim row of [ id ] buttons; a
-//   press opens the pane on that ticket. This is a render-side decoration: no prompt text, no
-//   CLAUDE.md rule, no tokens. The board's ids come from `bw list --all --json | jq -r '.[].id'`
-//   once, refreshed when stale or after a `bw create` / `bw delete` runs through the Bash tool.
+// - Under every reply that mentions a ticket, one dim row of [ id ] buttons; a press opens the pane
+//   on that ticket. A mention is a full id that is on its board (any board bw's registry knows), or
+//   a bare local part (`c50`, `wxh.5`) that is a ticket on this repo's own. The shape alone is not
+//   enough: `PM-internal` in prose has the shape of a `pm` id. This is a render-side decoration: no
+//   prompt text, no CLAUDE.md rule, no tokens. A board's ids come from
+//   `bw list --all --json | jq -r '.[].id'`, read the first time a drawing names its prefix and
+//   again when stale or after a `bw create` / `bw delete` runs through the Bash tool.
 // - The pane runs `bw show <id> --json` through $.process.run (cross-repo, via bw's
 //   registry) and draws the digest, the title, the description and the comments.
 //
@@ -25,15 +27,20 @@ const RECENT_CAP = 10
 // a ticket shown again within this window is not re-fetched; Refresh always is
 const FRESH_MS = 30_000
 const SHOW_TIMEOUT_MS = 20_000
-// the board's id list is re-read when a reply is drawn and it is older than this
+// a board's id list is re-read when a drawing names its prefix and the list is older than this
 const KNOWN_STALE_MS = 2 * 60_000
 const LIST_TIMEOUT_MS = 20_000
-// the board's ids: the JSON contract through jq (one id per line, a few KB), and when that pipeline
+// a board's ids: the JSON contract through jq (one id per line, a few KB), and when that pipeline
 // cannot run (no jq, no sh) the text listing, whose lines carry the id near the front. The JSON
 // itself is not read into the plugin: every description and comment rides along, 4 MB for 500
-// tickets, and $.process.run cuts output at a limit
-const LIST_ARGV: readonly string[] = ['sh', '-c', 'bw list --all --json | jq -r ".[].id"']
-const LIST_TEXT_ARGV: readonly string[] = ['bw', 'list', '--all']
+// tickets, and $.process.run cuts output at a limit. `dir` is another repo's path from the
+// registry; without one bw reads the cwd's board
+function listArgv(dir: string | undefined): string[] {
+  return dir === undefined ? ['sh', '-c', 'bw list --all --json | jq -r ".[].id"'] : ['sh', '-c', 'bw -C "$1" list --all --json | jq -r ".[].id"', 'sh', dir]
+}
+function listTextArgv(dir: string | undefined): string[] {
+  return ['bw', ...(dir === undefined ? [] : ['-C', dir]), 'list', '--all']
+}
 
 let ready: Promise<void> | undefined
 let matcher: RegExp | undefined
@@ -51,10 +58,14 @@ let openComments = new Set<number>()
 let search = ''
 let commandRegistered: Promise<void> | undefined
 
-let known: Known | undefined
-let knownAt = 0
-let knownRefresh: Promise<void> | undefined
-let boardWarned = false
+// every board read so far by prefix, when each was read, and the reads in flight
+const boards = new Map<string, Board>()
+const boardAt = new Map<string, number>()
+const boardRefresh = new Map<string, Promise<void>>()
+let homeAt = -Infinity
+let homeRefresh: Promise<void> | undefined
+// the boards said to be unreadable ('' is the session's own, when the cwd has none)
+const warned = new Set<string>()
 
 let mentionButtons = true
 let bareMentions = true
@@ -116,52 +127,97 @@ function ensureReady($: EngineInterface): Promise<void> {
   return ready
 }
 
-// the ids on this repo's board, for bare mentions; one run at a time, the old set drawn meanwhile
-function refreshKnown($: EngineInterface): Promise<void> {
-  if (!bareMentions) return Promise.resolve()
-  knownRefresh ??= (async () => {
+// one board's ids. The session's own board is the cwd's; another repo's is read at the paths the
+// registry files its prefix under, all of them, since two clones can share a prefix and differ
+async function readBoard($: EngineInterface, prefix: string): Promise<{ ids: Set<string> } | { error: string }> {
+  const dirs: (string | undefined)[] = prefix === defaultPrefix ? [undefined] : repoPaths[prefix] ?? []
+  if (dirs.length === 0) return { error: `the registry names no repo for ${prefix}` }
+  const ids = new Set<string>()
+  let error: string | undefined
+  let read = false
+  for (const dir of dirs) {
+    // the jq pipeline first; when it fails (no jq) the text listing decides, quietly
+    let r = await $.process.run(listArgv(dir), { timeoutMs: LIST_TIMEOUT_MS })
+    if (r.exitCode !== 0 || r.stdout.trim() === '') r = await $.process.run(listTextArgv(dir), { timeoutMs: LIST_TIMEOUT_MS })
+    if (r.exitCode === 0) {
+      read = true
+      for (const id of parseListIds(r.stdout, prefix)) ids.add(id)
+    } else error ??= r.stderr.trim() || `bw list exit ${r.exitCode}`
+  }
+  return read ? { ids } : { error: error ?? 'bw list failed' }
+}
+
+function sameBoard(a: Board | undefined, b: Board): boolean {
+  if (a === undefined || a === 'unreadable' || b === 'unreadable') return a === b
+  return a.size === b.size && [...b].every(id => a.has(id))
+}
+
+// reads one board; one run at a time per prefix, the old set drawn meanwhile. A board that cannot
+// be read is said once and marked, so its full ids draw unchecked instead of never
+function refreshBoard($: EngineInterface, prefix: string): Promise<void> {
+  let run = boardRefresh.get(prefix)
+  if (run !== undefined) return run
+  run = (async () => {
     try {
-      const here = await readPrefix($)
-      defaultPrefix = 'prefix' in here ? here.prefix : undefined
-      let ids = new Set<string>()
-      let error = 'error' in here ? here.error : undefined
-      if (error === undefined) {
-        // the jq pipeline first; when it fails (no jq) the text listing decides, quietly
-        let r = await $.process.run(LIST_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-        if (r.exitCode !== 0 || r.stdout.trim() === '') r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-        if (r.exitCode === 0) ids = parseListIds(r.stdout, defaultPrefix ?? '')
-        else error = r.stderr.trim() || `bw list exit ${r.exitCode}`
-      }
-      // no board here (a repo without `bw init`, bw missing): an empty set, said once, and full ids
-      // keep working through bw's registry
-      if (error !== undefined && !boardWarned) {
-        boardWarned = true
-        log($, `no board here, bare ids stay plain: ${error}`)
-      } else if (error === undefined) boardWarned = false
-      const before = known
-      const prefix = defaultPrefix ?? ''
-      const changed = before === undefined || before.prefix !== prefix || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
-      known = { prefix, ids }
+      const r = await readBoard($, prefix)
+      const board: Board = 'ids' in r ? r.ids : 'unreadable'
+      if ('error' in r && !warned.has(prefix)) {
+        warned.add(prefix)
+        log($, `cannot list the ${prefix} board, its ids go unchecked: ${r.error}`)
+      } else if ('ids' in r) warned.delete(prefix)
+      const changed = !sameBoard(boards.get(prefix), board)
+      boards.set(prefix, board)
       if (changed) $.ui.invalidate('ui.render')
     } catch (err) {
-      if (!boardWarned) {
-        boardWarned = true
+      if (!warned.has(prefix)) {
+        warned.add(prefix)
         log($, `bw list failed: ${err}`)
       }
     } finally {
-      knownAt = await $.clock.now()
-      knownRefresh = undefined
+      boardAt.set(prefix, await $.clock.now())
+      boardRefresh.delete(prefix)
     }
   })()
-  return knownRefresh
+  boardRefresh.set(prefix, run)
+  return run
 }
 
-// never blocks a drawing on bw: a missing or stale list is fetched in the background and the reply
-// redraws (the refresh invalidates) once it lands
-async function knownIfFresh($: EngineInterface): Promise<Known | undefined> {
-  if (!bareMentions) return undefined
-  if (known === undefined || (await $.clock.now()) - knownAt > KNOWN_STALE_MS) fire($, 'bw list', refreshKnown($))
-  return known
+// the session's own board: where the shell is now, then that board's ids
+function refreshHome($: EngineInterface): Promise<void> {
+  homeRefresh ??= (async () => {
+    try {
+      const before = defaultPrefix
+      const here = await readPrefix($)
+      defaultPrefix = 'prefix' in here ? here.prefix : undefined
+      // no board here (a repo without `bw init`, bw missing): said once, and full ids keep working
+      // through bw's registry
+      if ('error' in here && !warned.has('')) {
+        warned.add('')
+        log($, `no board here, bare ids stay plain: ${here.error}`)
+      } else if ('prefix' in here) warned.delete('')
+      if (before !== defaultPrefix) $.ui.invalidate('ui.render')
+      if (defaultPrefix !== undefined) await refreshBoard($, defaultPrefix)
+    } finally {
+      homeAt = await $.clock.now()
+      homeRefresh = undefined
+    }
+  })()
+  return homeRefresh
+}
+
+// never blocks a drawing on bw: the session's board and the boards `text` names, where missing or
+// stale, are fetched in the background, and the drawing happens again (a refresh invalidates) once
+// they land
+async function knownFor($: EngineInterface, text: string): Promise<Known> {
+  const now = await $.clock.now()
+  const homeStale = now - homeAt > KNOWN_STALE_MS
+  if (homeStale) fire($, 'bw list', refreshHome($))
+  for (const prefix of mentionedPrefixes(text, matcher)) {
+    // the home refresh reads the session's own board itself
+    if (homeStale && prefix === defaultPrefix) continue
+    if (now - (boardAt.get(prefix) ?? -Infinity) > KNOWN_STALE_MS) fire($, 'bw list', refreshBoard($, prefix))
+  }
+  return { prefix: bareMentions ? defaultPrefix ?? '' : '', boards }
 }
 
 function ensureCommand($: EngineInterface): Promise<void> {
@@ -340,6 +396,13 @@ function actionsFor($: EngineInterface): Actions {
   }
 }
 
+// the texts of a ticket the pane draws ids inside of
+function proseOf(l: Lookup | undefined): string {
+  if (l?.kind !== 'ticket') return ''
+  const t = l.ticket
+  return [t.description, t.closeReason ?? '', ...t.comments.map(c => c.text)].join('\n')
+}
+
 async function viewOf($: EngineInterface): Promise<View> {
   await ensureReady($)
   return {
@@ -353,7 +416,7 @@ async function viewOf($: EngineInterface): Promise<View> {
     search,
     defaultPrefix,
     matcher,
-    known: await knownIfFresh($),
+    known: await knownFor($, proseOf(current === undefined ? undefined : lookups[current])),
     now: await $.clock.now(),
     collapsedRows,
     digestChars,
@@ -375,16 +438,18 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     await ensureReady($)
     await ensureCommand($)
-    fire($, 'bw list', refreshKnown($))
+    fire($, 'bw list', refreshHome($))
     return r
   })
 
-  // a ticket made or removed through the Bash tool changes what a bare mention can mean
+  // a ticket made or removed through the Bash tool changes what a mention can mean: this board is
+  // read again now, and another repo's (`bw -C <repo> create`) the next time a drawing names it
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const r = await next(e)
-    if (r.result !== undefined && /\bbw\s+(create|delete|import)\b/.test(e.command)) {
+    if (r.result !== undefined && /\bbw\s+(?:-C\s+\S+\s+)?(create|delete|import)\b/.test(e.command)) {
       await ensureReady($)
-      fire($, 'bw list', refreshKnown($))
+      boardAt.clear()
+      fire($, 'bw list', refreshHome($))
     }
     return r
   })
@@ -428,7 +493,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (!mentionButtons) return next(e)
     await ensureReady($)
-    const ids = findMentions(e.props.text, matcher, await knownIfFresh($))
+    const ids = findMentions(e.props.text, matcher, await knownFor($, e.props.text))
     if (ids.length === 0) return next(e)
     const drawn = await next(e)
     const { Box } = $.ui.resolve(e)

@@ -30,7 +30,7 @@ To try it without installing, clone and run `claude --plugin-dir ./bw-peek`.
 
 ## What it draws
 
-**Under a reply.** Every assistant text block that mentions an id whose prefix
+**Under a reply.** Every assistant text block that mentions a ticket on a board
 bw's registry knows (`bw registry list`, see [The registry](#the-registry))
 gets one dim row beneath it:
 
@@ -44,15 +44,24 @@ click opens the pane on that ticket. This is a render-side decoration: the
 model's text is untouched, no rule asks it to format ids, and it costs no
 tokens. Ids with unknown prefixes (`sha-256`, `utf-8`) draw nothing.
 
+The shape of an id is not enough. With `pm` a registered prefix, "the
+PM-internal pieces" and "after PM-1a merges" both read as `pm` ids, so every
+full id is checked against its board and only a real ticket gets a button. A
+board's ids come from `bw list --all --json | jq -r '.[].id'` (the JSON
+contract, one id per line, about 4 KB for 500 tickets in 0.3 s): the session
+repo's own at session start, another repo's (`bw -C <path>`, the path from the
+registry) the first time a reply names its prefix. Each is re-read when a reply
+names it and the list is older than two minutes, and after a `bw create`,
+`bw delete` or `bw import` runs through the Bash tool. Without jq the plain
+`bw list --all` text listing is read instead. Until a board has been read its
+ids stay plain text, then the reply redraws with their buttons. A board bw
+cannot list (its repo moved, no `bw init`) gets one log line and its ids keep
+their buttons unchecked.
+
 Bare ids count too, when they are tickets on the session repo's own board:
 `c50`, `wxh.5`, `1jf.234` (three or four letters and digits, then any `.N`)
-draw as `[ adf-c50 ]` and so on. The board's ids come from
-`bw list --all --json | jq -r '.[].id'` (the JSON contract, one id per line,
-about 4 KB for 500 tickets in 0.3 s), read at session start, re-read when a
-reply is drawn and the list is older than two minutes, and right after a
-`bw create`, `bw delete` or `bw import` runs through the Bash tool. Without jq
-the plain `bw list --all` text listing is read instead. A bare id never reaches another board: it has no way to say which one it
-means. A short stoplist of common three- and four-letter words (`the`, `and`,
+draw as `[ adf-c50 ]` and so on. A bare id never reaches another board: it has
+no way to say which one it means. A short stoplist of common three- and four-letter words (`the`, `and`,
 `with`, `json`, ...) is skipped even if a ticket happens to spell one; that
 ticket is still one `/bw adf-the` away.
 
@@ -105,8 +114,8 @@ esc closes · type an id and press enter · /bw <id> from the prompt
   opens the full text in a box; `[ − ]` folds it.
 - Every ticket id inside the description, the close reason or an open comment
   is drawn in place as a button: `isolated from [ adf-lxh ] after [ adf-c50 ]
-  landed`. Full ids with a known prefix and bare ids on this board both count,
-  the same rule as under a reply. A press opens that ticket, and `recent` is
+  landed`. Full ids on their board and bare ids on this board both count, the
+  same rule as under a reply. A press opens that ticket, and `recent` is
   the way back. The plugin lays these texts out itself (a word wrap where an id
   is one token as wide as its button), so the row counts and the collapse cut
   are exact.
@@ -141,8 +150,9 @@ the render path.
 moves the session's cwd, so the repo's prefix is read again before every
 board read, not once at start. In a directory without `bw init` the plugin
 stays quiet: one log line says there is no board here, bare ids stay plain
-text, and full ids (`adf-c50`) still get their buttons and open through bw's
-registry, since `bw show` resolves any registered prefix from any cwd. Back
+text, and full ids (`adf-c50`) still get their buttons, checked against the
+board at the registry's path for their prefix, and open through bw's registry,
+since `bw show` resolves any registered prefix from any cwd. Back
 in a repo with a board, the bare ids light up again on the next read.
 
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
@@ -194,8 +204,8 @@ the config menu.
 | piece | mechanism |
 | --- | --- |
 | prefixes | `bw registry list --json` at session start (and after a hot reload), one `{ path, prefix }` per registered repo; the session repo's own prefix from `bw config get prefix`, read again before every board read since a Bash `cd` moves the session's cwd |
-| mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the board's id set; the engine's own drawing is wrapped in a column with the button row beneath |
-| the board | `sh -c 'bw list --all --json \| jq -r ".[].id"'`, ids of the session prefix read off the lines; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
+| mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, each match kept only when it is in its board's id set, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the session board's; the engine's own drawing is wrapped in a column with the button row beneath |
+| a board | `sh -c 'bw list --all --json \| jq -r ".[].id"'` for the session's own, `bw -C <path> list ...` for another repo's at every path the registry files its prefix under (two clones can share one; their ids are joined), ids of that prefix read off the lines, kept per prefix; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |
 | a ticket | `$.process.run(['bw', 'show', id, '--json'])` from the session cwd, 20 s timeout; exit 1 with `ambiguous ID ... matches a, b` becomes the candidate list, `no issue found` the missing state |
 | children | `bw show --json` names the parent on a child and nothing on the parent (the text view computes the list), so once the ticket lands a second call runs: `sh -c 'bw list --parent "$1" --all --json \| jq -c "[.[] \| {id, title, status, priority, blocked_by}]"'`, the whole rows without jq. `bw list` reads the cwd's board only, where `bw show` goes through the registry, so a ticket of another repo is listed with `bw -C <path>` when the registry names exactly one path for its prefix. The ticket draws first; the children join it when the list answers |

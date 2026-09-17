@@ -22,7 +22,7 @@ const PREFIX = 'adf'
 const board = new Set<string>()
 while (board.size < 500) board.add(`${PREFIX}-${local(3)}${rand() < 0.4 ? `.${Math.floor(rand() * 20) + 1}` : ''}`)
 const boardIds = [...board]
-const known = { prefix: PREFIX, ids: board }
+const known = { prefix: PREFIX, boards: new Map([[PREFIX, board]]) }
 const matcher = mentionMatcher([PREFIX, 'think', 'spire-cl', 'builder', 'engage'])
 
 const FILLER = 'The implementation now handles the worktree bootstrap path correctly and the smoke gate passes on every checked script.'

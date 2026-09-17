@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "bw-peek",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "A Beadwork ticket pane inside Claude Code: /bw <id> or a search box runs bw show and draws the digest, title, description and comments; every ticket id a reply mentions gets a button that opens it. Needs function hooks (CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1).",
   "author": { "name": "Manuel Zubieta", "email": "i@autom8things.com" },
   "keywords": ["beadwork", "bw", "tickets", "issues", "pane", "function-hooks"],

@@ -98,14 +98,24 @@ export function parseRegistry(json: string): string[] {
 }
 
 // a matcher for ids with one of these prefixes, longest prefix first so `spire-cl-x1` is not read
-// as `spire-...`; undefined with no prefixes, since a bare `[a-z]+-[a-z0-9]+` matches sha-256
+// as `spire-...`; undefined with no prefixes, since a bare `[a-z]+-[a-z0-9]+` matches sha-256. The
+// prefix is group 1. A match has the shape of an id and nothing more: `PM-internal` in prose is one
+// wherever `pm` is a prefix, so a mention is checked against its board (see Known) before it draws.
 export function mentionMatcher(prefixes: readonly string[]): RegExp | undefined {
   if (prefixes.length === 0) return undefined
   const alts = [...prefixes]
     .sort((a, b) => b.length - a.length)
     .map(p => p.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'))
     .join('|')
-  return new RegExp(`(?<![a-z0-9_-])(?:${alts})-${LOCAL_MENTIONED}(?![a-z0-9_-])`, 'gi')
+  return new RegExp(`(?<![a-z0-9_-])(${alts})-${LOCAL_MENTIONED}(?![a-z0-9_-])`, 'gi')
+}
+
+// the prefixes a text names in id-shaped words, each once: the boards a drawing of it needs read
+export function mentionedPrefixes(text: string, matcher: RegExp | undefined): string[] {
+  if (matcher === undefined) return []
+  const out = new Set<string>()
+  for (const m of text.matchAll(matcher)) out.add((m[1] as string).toLowerCase())
+  return [...out]
 }
 
 // a bare local part as the agent writes one without its prefix: `c50`, `wxh.5`, `1jf.234`. Three or
@@ -136,30 +146,46 @@ export function parseListIds(text: string, prefix: string): Set<string> {
   return out
 }
 
-export type Known = { prefix: string; ids: ReadonlySet<string> }
+// a board's ids as read, or 'unreadable' when bw could not list it (no registered path, no `bw init`)
+export type Board = ReadonlySet<string> | 'unreadable'
 
-// the distinct ids a text mentions, in order of first mention: full ids with a known prefix, and bare
-// local parts that are tickets on the session's own board (never another board's; a bare id has no
-// way to say which)
-export function findMentions(text: string, matcher: RegExp | undefined, known?: Known): string[] {
-  const hits: { at: number; id: string }[] = []
-  if (matcher !== undefined) for (const m of text.matchAll(matcher)) hits.push({ at: m.index, id: m[0].toLowerCase() })
-  if (known !== undefined && known.ids.size > 0)
+// what is known of the boards: `prefix` is the session board's ('' without one), the only board a
+// bare local part can mean; `boards` holds every board read so far, by prefix
+export type Known = { prefix: string; boards: ReadonlyMap<string, Board> }
+
+type Hit = { at: number; end: number; id: string }
+
+// the ids in a text, in order. A full id counts when it is on its board; on an unreadable board
+// there is nothing to check it against and its shape decides, as it does for every full id without
+// `known`. A board not read yet holds its ids back: a button that arrives late beats one that
+// vanishes. A bare local part counts when it is a ticket on the session's own board (never another
+// board's; a bare id has no way to say which).
+function hitsIn(text: string, matcher: RegExp | undefined, known: Known | undefined): Hit[] {
+  const hits: Hit[] = []
+  if (matcher !== undefined)
+    for (const m of text.matchAll(matcher)) {
+      const id = m[0].toLowerCase()
+      const board = known?.boards.get((m[1] as string).toLowerCase())
+      if (known === undefined || board === 'unreadable' || board?.has(id)) hits.push({ at: m.index, end: m.index + m[0].length, id })
+    }
+  const home = known === undefined || known.prefix === '' ? undefined : known.boards.get(known.prefix)
+  if (known !== undefined && home !== undefined && home !== 'unreadable' && home.size > 0)
     for (const m of text.matchAll(BARE_RE)) {
       const word = m[0].toLowerCase()
       if (STOPWORDS.has(word)) continue
       const id = `${known.prefix}-${word}`
-      if (known.ids.has(id)) hits.push({ at: m.index, id })
+      if (home.has(id)) hits.push({ at: m.index, end: m.index + m[0].length, id })
     }
-  hits.sort((a, b) => a.at - b.at)
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const h of hits) {
-    if (seen.has(h.id)) continue
-    seen.add(h.id)
-    out.push(h.id)
-  }
+  hits.sort((a, b) => a.at - b.at || b.end - a.end)
+  // overlapping hits (a bare match inside a full id) keep the earlier, longer one
+  const out: Hit[] = []
+  for (const h of hits) if (out.length === 0 || h.at >= (out[out.length - 1] as Hit).end) out.push(h)
   return out
+}
+
+// the distinct ids a text mentions, in order of first mention
+export function findMentions(text: string, matcher: RegExp | undefined, known?: Known): string[] {
+  return [...new Set(hitsIn(text, matcher, known).map(h => h.id))]
 }
 
 function str(v: unknown): string {
@@ -358,30 +384,13 @@ export function lines(text: string): string[] {
 
 // ---- inline ids ----------------------------------------------------------------------------------
 
-// a run of a line: plain text, or a ticket id drawn as a button (full id with a known prefix, or a
-// bare local part that is a ticket on the session board). `text` is the id as written.
+// a run of a line: plain text, or a ticket id drawn as a button (a mention, as findMentions counts
+// them). `text` is the id as written.
 export type Piece = { kind: 'text'; text: string } | { kind: 'id'; id: string; text: string }
 export type Row = Piece[]
 
 // cells a Button takes on the terminal beyond its label: the engine's `[ ` and ` ]`
 export const BUTTON_CHROME = 4
-
-function hitsIn(text: string, matcher: RegExp | undefined, known: Known | undefined): { at: number; end: number; id: string }[] {
-  const hits: { at: number; end: number; id: string }[] = []
-  if (matcher !== undefined) for (const m of text.matchAll(matcher)) hits.push({ at: m.index, end: m.index + m[0].length, id: m[0].toLowerCase() })
-  if (known !== undefined && known.ids.size > 0)
-    for (const m of text.matchAll(BARE_RE)) {
-      const word = m[0].toLowerCase()
-      if (STOPWORDS.has(word)) continue
-      const id = `${known.prefix}-${word}`
-      if (known.ids.has(id)) hits.push({ at: m.index, end: m.index + m[0].length, id })
-    }
-  hits.sort((a, b) => a.at - b.at || b.end - a.end)
-  // overlapping hits (a bare match inside a full id) keep the earlier, longer one
-  const out: typeof hits = []
-  for (const h of hits) if (out.length === 0 || h.at >= (out[out.length - 1] as { end: number }).end) out.push(h)
-  return out
-}
 
 // one line as pieces, in order
 export function piecesOf(line: string, matcher: RegExp | undefined, known: Known | undefined): Piece[] {

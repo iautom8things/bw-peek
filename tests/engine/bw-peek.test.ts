@@ -11,6 +11,8 @@ const PLUGIN = 'bw-peek'
 const REGISTRY = JSON.stringify([{ path: '/a', prefix: 'adf' }, { path: '/b', prefix: 'think' }])
 // the board, as `bw list --all --json | jq -r '.[].id'` prints it
 const LIST = ['adf-c50', 'adf-wxh.5', 'adf-zu6', 'adf-the'].join('\n')
+// the think board, at the registry's /b, read with `bw -C /b list ...`
+const THINK_LIST = ['think-1pp', 'think-1pp.4'].join('\n')
 // and as the text listing prints it, for the fallback
 const LIST_TEXT = ['✓ adf-c50 P1 live-activity [blocks: adf-lxh]', '❄ adf-wxh.5 P2 S5 follow-up', '○ adf-zu6 P1 [BUG] pi-real.sh guard'].join('\n')
 
@@ -122,6 +124,13 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
       const id = argv[argv.indexOf('--parent') + 1] as string
       return { value: { exitCode: 0, stdout: JSON.stringify(kids[id] ?? null), stderr: '' } }
     }
+    // another repo's board: `sh -c 'bw -C "$1" list --all --json | jq ...' sh <dir>`, or the text listing
+    if ((argv[0] === 'sh' && argv[2]?.startsWith('bw -C "$1" list --all')) || (argv[0] === 'bw' && argv[1] === '-C' && argv[3] === 'list')) {
+      const dir = argv[0] === 'sh' ? argv[4] : argv[2]
+      if (noBoard) return { value: argv[0] === 'sh' ? { ...NO_BOARD, exitCode: 0 } : NO_BOARD }
+      if (noJq && argv[0] === 'sh') return { value: { exitCode: 127, stdout: '', stderr: 'sh: jq: command not found' } }
+      return { value: { exitCode: 0, stdout: dir === '/a' ? LIST : dir === '/b' ? THINK_LIST : '', stderr: '' } }
+    }
     if (argv[0] === 'sh' && argv[2]?.startsWith('bw list --all --json | jq')) {
       if (noBoard) return { value: { ...NO_BOARD, exitCode: 0 } } // jq exits 0 on empty input; no pipefail
       if (noJq) return { value: { exitCode: 127, stdout: '', stderr: 'sh: jq: command not found' } }
@@ -150,6 +159,9 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
   on('command.run', async () => ({}))
   return { clock, calls, logs, kids }
 }
+
+// the reads of the session's own board through the jq pipeline
+const homeLists = (calls: string[][]) => calls.filter(c => c[0] === 'sh' && c[2]?.startsWith('bw list --all'))
 
 const ok = (t: unknown): Run => ({ exitCode: 0, stdout: JSON.stringify(t), stderr: '' })
 
@@ -331,8 +343,12 @@ describe('the pane', () => {
 
 describe('under a reply', () => {
   test('a reply naming tickets gets one button per distinct id, capped with +N more', async ($, on) => {
-    world(on)
-    const text = textOf(await reply($, 'Closed adf-c50 and adf-c50 again; think-1pp.4 is next, then adf-a1, adf-a2, adf-a3, adf-a4, adf-a5.'))
+    const { clock } = world(on, {}, 'adf', {}, [[LIST, 'adf-a1', 'adf-a2', 'adf-a3', 'adf-a4', 'adf-a5'].join('\n')])
+    const said = 'Closed adf-c50 and adf-c50 again; think-1pp.4 is next, then adf-a1, adf-a2, adf-a3, adf-a4, adf-a5.'
+    // the boards are read in the background; until they land no id is vouched for
+    expect(textOf(await reply($, said))).not.toContain('◈')
+    await clock.settle()
+    const text = textOf(await reply($, said))
     expect(text).toContain('Closed adf-c50 and adf-c50 again')
     expect(text).toContain('◈ [adf-c50] [think-1pp.4] [adf-a1] [adf-a2] [adf-a3] [adf-a4] +1 more')
   })
@@ -351,6 +367,20 @@ describe('under a reply', () => {
     expect(text).not.toContain('[adf-abc]')
   })
 
+  test('prose shaped like an id is not a ticket: only ids on their board get a button', async ($, on) => {
+    const { calls, clock } = world(on)
+    const said = 'ADF-G and the ADF-internal pieces ship after adf-1a; adf-c50 and think-1pp.4 are real, think-nope is not.'
+    await reply($, said)
+    await clock.settle()
+    // think is not the session's board: it is read at the path the registry files it under
+    expect(calls).toContainEqual(['sh', '-c', 'bw -C "$1" list --all --json | jq -r ".[].id"', 'sh', '/b'])
+    const text = textOf(await reply($, said))
+    expect(text).toContain('◈ [adf-c50] [think-1pp.4]')
+    expect(text).not.toContain('[adf-internal]')
+    expect(text).not.toContain('[adf-1a]')
+    expect(text).not.toContain('[think-nope]')
+  })
+
   test('a ticket filed through the Bash tool re-reads the board, so the new id lights up', async ($, on) => {
     const { calls, clock } = world(on, {}, 'adf', {}, [LIST, `${LIST}\nadf-q7z`])
     on('tool.call', { tool: 'Bash' }, async () => ({ result: { stdout: 'created adf-q7z: just filed', stderr: '', interrupted: false } }))
@@ -358,7 +388,7 @@ describe('under a reply', () => {
     await clock.settle()
     await $.tool.call({ tool: 'Bash', command: "bw create 'just filed' -t task", description: 'File a ticket' })
     await clock.settle()
-    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(2)
+    expect(homeLists(calls)).toHaveLength(2)
     expect(textOf(await reply($, 'Filed q7z for this.', 'msg-2'))).toContain('◈ [adf-q7z]')
   })
 
@@ -366,24 +396,26 @@ describe('under a reply', () => {
     const { calls, clock } = world(on, {}, 'adf', {}, [], true)
     await reply($, 'warm', 'msg-0')
     await clock.settle()
-    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(1)
+    expect(homeLists(calls)).toHaveLength(1)
     expect(calls).toContainEqual(['bw', 'list', '--all'])
     // adf-lxh is on the text page only as a blocker, and still counts
     expect(textOf(await reply($, 'c50 blocks lxh; wxh.5 waits.'))).toContain('◈ [adf-c50] [adf-lxh] [adf-wxh.5]')
   })
 
-  test('a repo without a board: full ids still get buttons, bare ids stay plain, one log line in all', async ($, on) => {
+  test('a repo without a board: full ids still get buttons, unchecked; bare ids stay plain; one log line a board', async ($, on) => {
     const { calls, clock, logs } = world(on, {}, 'adf', {}, [], false, true)
     await reply($, 'warm', 'msg-0')
     await clock.settle()
     // the pipeline, then the text listing, then nothing more for this redraw
-    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(1)
+    expect(homeLists(calls)).toHaveLength(1)
     expect(calls.filter(c => c[0] === 'bw' && c[1] === 'list')).toHaveLength(1)
+    await reply($, 'c50 blocks adf-lxh; see think-1pp.')
+    await clock.settle()
     const tree = textOf(await reply($, 'c50 blocks adf-lxh; see think-1pp.'))
     expect(tree).toContain('◈ [adf-lxh] [think-1pp]')
     expect(tree).not.toContain('[adf-c50]')
-    // said once, without the plugin naming itself (the engine does that)
-    expect(logs).toHaveLength(1)
+    // said once for each board, without the plugin naming itself (the engine does that)
+    expect(logs).toHaveLength(2)
     expect(JSON.stringify(logs[0])).toContain('beadwork not initialized')
     expect(JSON.stringify(logs[0])).not.toContain('bw-peek')
     // a later redraw past the stale window reads again and stays quiet
@@ -391,7 +423,7 @@ describe('under a reply', () => {
     await reply($, 'still c50', 'msg-9')
     await clock.settle()
     expect(calls.filter(c => c[0] === 'bw' && c[1] === 'list')).toHaveLength(2)
-    expect(logs).toHaveLength(1)
+    expect(logs).toHaveLength(2)
   })
 
   test('a cd through the Bash tool moves the board with the session: away from one, and back', async ($, on) => {
@@ -403,15 +435,17 @@ describe('under a reply', () => {
     // the shell moves to a repo without bw init; the next stale read finds no board
     here.current = undefined
     await clock.advance(3 * 60_000)
-    await reply($, 'c50 again', 'msg-2')
+    await reply($, 'c50 and adf-zu6 here.', 'msg-2')
     await clock.settle()
-    const away = textOf(await reply($, 'c50 and adf-lxh here.', 'msg-3'))
-    expect(away).toContain('◈ [adf-lxh]')
+    // a full id is still checked, against the board at the registry's path for adf
+    const away = textOf(await reply($, 'c50 and adf-zu6 here.', 'msg-3'))
+    expect(away).toContain('◈ [adf-zu6]')
     expect(away).not.toContain('[adf-c50]')
     expect(logs).toHaveLength(1)
     expect(JSON.stringify(logs[0])).toContain('beadwork not initialized')
-    // no list is attempted while the prefix call fails
-    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(1)
+    // the cwd's board is not listed while the prefix call fails
+    expect(homeLists(calls)).toHaveLength(1)
+    expect(calls).toContainEqual(['sh', '-c', 'bw -C "$1" list --all --json | jq -r ".[].id"', 'sh', '/a'])
     // and back
     here.current = 'adf'
     await clock.advance(3 * 60_000)
@@ -430,6 +464,8 @@ describe('under a reply', () => {
 
   test('pressing an id button opens the pane on that ticket', async ($, on) => {
     const { calls, clock } = world(on, { 'adf-c50': ok(C50) })
+    await reply($, 'See adf-c50.')
+    await clock.settle()
     await reply($, 'See adf-c50.')
     await $.ui.press({ plugin: PLUGIN, key: 'mention-adf-c50', requestId: 'msg-1' })
     await clock.settle()

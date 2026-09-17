@@ -54,9 +54,11 @@ registry) the first time a reply names its prefix. Each is re-read when a reply
 names it and the list is older than two minutes, and after a `bw create`,
 `bw delete` or `bw import` runs through the Bash tool. Without jq the plain
 `bw list --all` text listing is read instead. Until a board has been read its
-ids stay plain text, then the reply redraws with their buttons. A board bw
-cannot list (its repo moved, no `bw init`) gets one log line and its ids keep
-their buttons unchecked.
+ids stay plain text, then the reply redraws with their buttons. One drawing
+starts at most six board reads, in order of mention; the redraw each causes
+starts the next. A board bw cannot list (its repo moved, no `bw init`) gets one
+log line: if it was read before it keeps the ids it had, and if it never was
+its ids keep their buttons unchecked.
 
 Bare ids count too, when they are tickets on the session repo's own board:
 `c50`, `wxh.5`, `1jf.234` (three or four letters and digits, then any `.N`)

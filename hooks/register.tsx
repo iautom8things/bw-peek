@@ -30,6 +30,9 @@ const SHOW_TIMEOUT_MS = 20_000
 // a board's id list is re-read when a drawing names its prefix and the list is older than this
 const KNOWN_STALE_MS = 2 * 60_000
 const LIST_TIMEOUT_MS = 20_000
+// the most board reads one drawing starts: a reply can name every prefix in the registry, and each
+// read is a `bw list` per path
+const BOARDS_PER_DRAW = 6
 // a board's ids: the JSON contract through jq (one id per line, a few KB), and when that pipeline
 // cannot run (no jq, no sh) the text listing, whose lines carry the id near the front. The JSON
 // itself is not read into the plugin: every description and comment rides along, 4 MB for 500
@@ -64,6 +67,8 @@ const boardAt = new Map<string, number>()
 const boardRefresh = new Map<string, Promise<void>>()
 let homeAt = -Infinity
 let homeRefresh: Promise<void> | undefined
+// moves when a ticket is made or removed; a read that began under an older one is not fresh
+let generation = 0
 // the boards said to be unreadable ('' is the session's own, when the cwd has none)
 const warned = new Set<string>()
 
@@ -128,7 +133,9 @@ function ensureReady($: EngineInterface): Promise<void> {
 }
 
 // one board's ids. The session's own board is the cwd's; another repo's is read at the paths the
-// registry files its prefix under, all of them, since two clones can share a prefix and differ
+// registry files its prefix under. All of them, where listChildren declines: a parent has one
+// home, but different repos do share a prefix (bw cuts it at eight characters, so `specled_ex` and
+// `specled_scenarios` are both `specled_`), and an id on either board is a ticket
 async function readBoard($: EngineInterface, prefix: string): Promise<{ ids: Set<string> } | { error: string }> {
   const dirs: (string | undefined)[] = prefix === defaultPrefix ? [undefined] : repoPaths[prefix] ?? []
   if (dirs.length === 0) return { error: `the registry names no repo for ${prefix}` }
@@ -153,37 +160,46 @@ function sameBoard(a: Board | undefined, b: Board): boolean {
 }
 
 // reads one board; one run at a time per prefix, the old set drawn meanwhile. A board that cannot
-// be read is said once and marked, so its full ids draw unchecked instead of never
+// be read is said once. One never read is marked, so its full ids draw unchecked instead of never;
+// one read before keeps the ids it had, since unchecked would hand prose its buttons back
 function refreshBoard($: EngineInterface, prefix: string): Promise<void> {
   let run = boardRefresh.get(prefix)
   if (run !== undefined) return run
+  const started = generation
   run = (async () => {
     try {
       const r = await readBoard($, prefix)
-      const board: Board = 'ids' in r ? r.ids : 'unreadable'
+      const before = boards.get(prefix)
+      const kept = before !== undefined && before !== 'unreadable'
+      const board: Board = 'ids' in r ? r.ids : kept ? before : 'unreadable'
       if ('error' in r && !warned.has(prefix)) {
         warned.add(prefix)
-        log($, `cannot list the ${prefix} board, its ids go unchecked: ${r.error}`)
+        log($, `cannot list the ${prefix} board, ${kept ? 'keeping the ids read before' : 'its ids go unchecked'}: ${r.error}`)
       } else if ('ids' in r) warned.delete(prefix)
-      const changed = !sameBoard(boards.get(prefix), board)
+      const changed = !sameBoard(before, board)
       boards.set(prefix, board)
       if (changed) $.ui.invalidate('ui.render')
     } catch (err) {
+      // the same rule when the read threw: a board never read is marked, one read before is kept
+      if (!boards.has(prefix)) boards.set(prefix, 'unreadable')
       if (!warned.has(prefix)) {
         warned.add(prefix)
         log($, `bw list failed: ${err}`)
       }
     } finally {
-      boardAt.set(prefix, await $.clock.now())
       boardRefresh.delete(prefix)
+      // a read that began before a ticket was made or removed does not get to call itself fresh
+      if (started === generation) boardAt.set(prefix, await $.clock.now())
     }
   })()
   boardRefresh.set(prefix, run)
   return run
 }
 
-// the session's own board: where the shell is now, then that board's ids
+// the session's own board: where the shell is now, then that board's ids. Nothing else reads the
+// cwd's board: only here is the prefix known to be the cwd's at the moment of the read
 function refreshHome($: EngineInterface): Promise<void> {
+  const started = generation
   homeRefresh ??= (async () => {
     try {
       const before = defaultPrefix
@@ -198,8 +214,8 @@ function refreshHome($: EngineInterface): Promise<void> {
       if (before !== defaultPrefix) $.ui.invalidate('ui.render')
       if (defaultPrefix !== undefined) await refreshBoard($, defaultPrefix)
     } finally {
-      homeAt = await $.clock.now()
       homeRefresh = undefined
+      if (started === generation) homeAt = await $.clock.now()
     }
   })()
   return homeRefresh
@@ -207,15 +223,17 @@ function refreshHome($: EngineInterface): Promise<void> {
 
 // never blocks a drawing on bw: the session's board and the boards `text` names, where missing or
 // stale, are fetched in the background, and the drawing happens again (a refresh invalidates) once
-// they land
+// they land. At most BOARDS_PER_DRAW reads start from one drawing, in order of mention; the redraw
+// each one causes starts the next
 async function knownFor($: EngineInterface, text: string): Promise<Known> {
   const now = await $.clock.now()
-  const homeStale = now - homeAt > KNOWN_STALE_MS
-  if (homeStale) fire($, 'bw list', refreshHome($))
+  if (now - homeAt > KNOWN_STALE_MS) fire($, 'bw list', refreshHome($))
+  let reads = 0
   for (const prefix of mentionedPrefixes(text, matcher)) {
-    // the home refresh reads the session's own board itself
-    if (homeStale && prefix === defaultPrefix) continue
-    if (now - (boardAt.get(prefix) ?? -Infinity) > KNOWN_STALE_MS) fire($, 'bw list', refreshBoard($, prefix))
+    // the session's own board is refreshHome's to read
+    if (prefix === defaultPrefix || now - (boardAt.get(prefix) ?? -Infinity) <= KNOWN_STALE_MS) continue
+    if (reads++ === BOARDS_PER_DRAW) break
+    fire($, 'bw list', refreshBoard($, prefix))
   }
   return { prefix: bareMentions ? defaultPrefix ?? '' : '', boards }
 }
@@ -448,7 +466,9 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     if (r.result !== undefined && /\bbw\s+(?:-C\s+\S+\s+)?(create|delete|import)\b/.test(e.command)) {
       await ensureReady($)
+      generation++
       boardAt.clear()
+      homeAt = -Infinity
       fire($, 'bw list', refreshHome($))
     }
     return r

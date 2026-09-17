@@ -149,8 +149,8 @@ export function parseListIds(text: string, prefix: string): Set<string> {
 // a board's ids as read, or 'unreadable' when bw could not list it (no registered path, no `bw init`)
 export type Board = ReadonlySet<string> | 'unreadable'
 
-// what is known of the boards: `prefix` is the session board's ('' without one), the only board a
-// bare local part can mean; `boards` holds every board read so far, by prefix
+// what is known of the boards: `prefix` names the board a bare local part means, the session's
+// own ('' without one, or with bare ids turned off); `boards` holds every board read so far, by prefix
 export type Known = { prefix: string; boards: ReadonlyMap<string, Board> }
 
 type Hit = { at: number; end: number; id: string }

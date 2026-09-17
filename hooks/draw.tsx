@@ -55,9 +55,10 @@ export type View = {
   // the search field's text, as the person has typed it
   search: string
   defaultPrefix?: string
-  // what makes an id in a description or comment a button: the registry's prefixes, this board's ids
+  // what makes an id in a description or comment a button: the registry's prefixes, and the ids
+  // of every board read so far
   matcher?: RegExp
-  known?: Known
+  known: Known
   now: number
   collapsedRows: number
   digestChars: number

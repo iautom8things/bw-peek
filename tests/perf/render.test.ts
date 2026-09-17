@@ -9,7 +9,7 @@ import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 declare const console: { log: (...args: unknown[]) => void }
 
 const T0 = Date.parse('2026-09-16T10:00:00')
-const REGISTRY = JSON.stringify({ schema_version: 1, repos: { '/a': { prefix: 'adf' }, '/b': { prefix: 'think' } } })
+const REGISTRY = JSON.stringify([{ path: '/a', prefix: 'adf' }, { path: '/b', prefix: 'think' }])
 
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
 let seed = 7
@@ -39,7 +39,7 @@ function world(on: On) {
   on('env.get', async () => ({ value: '/home/mz' }))
   on('process.run', async (_, e) => {
     const argv = [...e.argv]
-    if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
+    if (argv[1] === 'registry') return { value: { exitCode: 0, stdout: `${REGISTRY}\n`, stderr: '' } }
     if (argv[1] === 'config') return { value: { exitCode: 0, stdout: 'adf\n', stderr: '' } }
     if (argv[0] === 'sh' || argv[1] === 'list') return { value: { exitCode: 0, stdout: LIST, stderr: '' } }
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected' } }

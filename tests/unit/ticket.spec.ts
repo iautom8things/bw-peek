@@ -109,21 +109,22 @@ describe('normalizeId', () => {
 })
 
 describe('registry and mentions', () => {
-  const registry = JSON.stringify({
-    schema_version: 1,
-    repos: {
-      '/a': { prefix: 'adf' },
-      '/b': { prefix: 'think', aliases: ['plans'] },
-      '/c': { prefix: 'spire-cl' },
-      '/d': {},
-      '/e': { prefix: 'Bad Prefix!' },
-    },
-  })
+  // as `bw registry list --json` prints it
+  const registry = JSON.stringify([
+    { path: '/a', prefix: 'adf' },
+    { path: '/b', prefix: 'think' },
+    { path: '/c', prefix: 'spire-cl' },
+    { path: '/d' },
+    { path: '/e', prefix: 'Bad Prefix!' },
+    { path: '/b2', prefix: 'think' },
+  ])
 
-  test('reads the prefixes out of registry.json, sorted, ignoring repos without one', () => {
+  test('reads the prefixes out of bw registry list --json, sorted, each once, ignoring repos without one', () => {
     expect(parseRegistry(registry)).toEqual(['adf', 'spire-cl', 'think'])
     expect(parseRegistry('not json')).toEqual([])
+    expect(parseRegistry('[]')).toEqual([])
     expect(parseRegistry('{}')).toEqual([])
+    expect(parseRegistry('No registered repositories\n')).toEqual([])
   })
 
   test('finds each distinct mention once, in order, case folded', () => {
@@ -334,9 +335,10 @@ describe('children', () => {
   })
 
   test('the registry maps a prefix to its repo paths; an id takes its longest registered prefix', () => {
-    const paths = parseRegistryPaths(JSON.stringify({ repos: { '/a': { prefix: 'adf' }, '/b': { prefix: 'think' }, '/b2': { prefix: 'think' }, '/c': { prefix: 'Bad Prefix' } } }))
+    const paths = parseRegistryPaths(JSON.stringify([{ path: '/a', prefix: 'adf' }, { path: '/b', prefix: 'think' }, { path: '/b2', prefix: 'think' }, { path: '/c', prefix: 'Bad Prefix' }]))
     expect(paths).toEqual({ adf: ['/a'], think: ['/b', '/b2'] })
     expect(parseRegistryPaths('not json')).toEqual({})
+    expect(parseRegistryPaths('[]')).toEqual({})
     expect(prefixOf('spire-cl-0aa', ['spire', 'spire-cl'])).toBe('spire-cl')
     expect(prefixOf('adf-c50', ['think'])).toBeUndefined()
   })

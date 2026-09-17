@@ -13,7 +13,7 @@ import { findMentions, isTicketId, type Known, mentionMatcher, normalizeId, pars
 //   press opens the pane on that ticket. This is a render-side decoration: no prompt text, no
 //   CLAUDE.md rule, no tokens. The board's ids come from `bw list --all --json | jq -r '.[].id'`
 //   once, refreshed when stale or after a `bw create` / `bw delete` runs through the Bash tool.
-// - The pane runs `bw show <id> --json` through $.process.run (cross-repo, via ~/.beadwork's
+// - The pane runs `bw show <id> --json` through $.process.run (cross-repo, via bw's
 //   registry) and draws the digest, the title, the description and the comments.
 //
 // Nothing here writes to bw. Recent lookups live in $.store across sessions.
@@ -90,16 +90,16 @@ async function readPrefix($: EngineInterface): Promise<{ prefix: string } | { er
 
 function ensureReady($: EngineInterface): Promise<void> {
   ready ??= (async () => {
+    // bw's host-local registry (0.13+; off until `registry.auto` is set in ~/.bw, see the README).
+    // An older bw has no `registry` command and an empty registry prints `[]`: either way the
+    // session repo's own prefix, read next, is all the plugin knows
     try {
-      const home = await $.env.get('HOME')
-      if (home !== undefined && home !== '') {
-        const r = await $.process.run(['cat', `${home}/.beadwork/registry.json`], { timeoutMs: 5000 })
-        if (r.exitCode === 0) {
-          prefixes.push(...parseRegistry(r.stdout))
-          repoPaths = parseRegistryPaths(r.stdout)
-        }
-        else log($, `registry unreadable (exit ${r.exitCode}): ${r.stderr.trim()}`)
+      const r = await $.process.run(['bw', 'registry', 'list', '--json'], { timeoutMs: 8000 })
+      if (r.exitCode === 0) {
+        prefixes.push(...parseRegistry(r.stdout))
+        repoPaths = parseRegistryPaths(r.stdout)
       }
+      else log($, `registry unreadable (bw registry list exit ${r.exitCode}): ${r.stderr.trim()}`)
     } catch (err) {
       log($, `registry read failed: ${err}`)
     }

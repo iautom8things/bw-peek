@@ -31,7 +31,8 @@ To try it without installing, clone and run `claude --plugin-dir ./bw-peek`.
 ## What it draws
 
 **Under a reply.** Every assistant text block that mentions an id whose prefix
-bw's registry knows (`~/.beadwork/registry.json`) gets one dim row beneath it:
+bw's registry knows (`bw registry list`, see [The registry](#the-registry))
+gets one dim row beneath it:
 
 ```
 ⏺ The work is tracked in adf-c50 and think-1pp, and adf-zu6 blocks adf-lxh.
@@ -150,6 +151,30 @@ tickets, not of searches: an id joins it once bw has answered with a ticket,
 a miss or an unresolved partial never does, and a stored id that stops
 resolving leaves. Ten ids, in the plugin store across sessions.
 
+## The registry
+
+bw keeps a host-local list of the repos it has run in, and `bw show` resolves
+any registered prefix from any cwd. That list is what gives an id from another
+repo (`think-1pp`, read in the `adf` repo) its button, and what lets the pane
+open it and list its children. The registry is off by default. Turn it on once
+in bw's global config, `~/.bw` (YAML; `BW_CONFIG` names another file):
+
+```yaml
+registry:
+  auto: true
+```
+
+From then on every successful `bw` command registers the repo it ran in, so a
+board joins the list the next time bw runs there (`bw list` in each repo is
+enough). `bw registry list` shows the entries with their prefixes, and
+`bw registry prune` drops the ones whose paths are gone. The plugin reads the
+list once at session start, so a repo registered mid-session gets its buttons
+in the next session (or after a hot reload).
+
+Needs bw 0.13.0 or later. On an older bw, or with the registry empty, the
+plugin still knows the prefix of the repo the session runs in, so that board's
+ids keep their buttons; only ids of other repos stay plain text.
+
 ## Config
 
 Set under `pluginConfigs["bw-peek@bw-peek"].options` in the user
@@ -168,7 +193,7 @@ the config menu.
 
 | piece | mechanism |
 | --- | --- |
-| prefixes | `cat $HOME/.beadwork/registry.json` at session start (and after a hot reload), `repos.*.prefix`; the session repo's own prefix from `bw config get prefix`, read again before every board read since a Bash `cd` moves the session's cwd |
+| prefixes | `bw registry list --json` at session start (and after a hot reload), one `{ path, prefix }` per registered repo; the session repo's own prefix from `bw config get prefix`, read again before every board read since a Bash `cd` moves the session's cwd |
 | mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the board's id set; the engine's own drawing is wrapped in a column with the button row beneath |
 | the board | `sh -c 'bw list --all --json \| jq -r ".[].id"'`, ids of the session prefix read off the lines; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |

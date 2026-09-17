@@ -1,5 +1,5 @@
 // bw-peek: the hooks against the engine's own `$`, run by `claude plugin test`. The world beneath
-// the plugin is answered here: HOME, the registry file and every `bw` call from a table keyed by
+// the plugin is answered here: HOME and every `bw` call, the registry listing among them, from a table keyed by
 // argv, the clock and store from memory.
 import type { On } from 'claude-code'
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
@@ -7,7 +7,8 @@ import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 const T0 = Date.parse('2026-09-16T10:00:00')
 const PLUGIN = 'bw-peek'
 
-const REGISTRY = JSON.stringify({ schema_version: 1, repos: { '/a': { prefix: 'adf' }, '/b': { prefix: 'think' } } })
+// the registry, as `bw registry list --json` prints it
+const REGISTRY = JSON.stringify([{ path: '/a', prefix: 'adf' }, { path: '/b', prefix: 'think' }])
 // the board, as `bw list --all --json | jq -r '.[].id'` prints it
 const LIST = ['adf-c50', 'adf-wxh.5', 'adf-zu6', 'adf-the'].join('\n')
 // and as the text listing prints it, for the fallback
@@ -93,7 +94,7 @@ function run($: Engine, args: string) {
   return $.command.run({ command: 'bw', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 }
 
-// the world: HOME, the registry, `bw config get prefix`, and `bw show` from a table
+// the world: HOME, `bw registry list --json`, `bw config get prefix`, and `bw show` from a table
 // `prefix` may be a holder whose `current` the test moves, the way a `cd` moves the session's cwd
 function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: string | { current: string | undefined } = 'adf', stored: Record<string, unknown> = {}, lists: string[] = [], noJq = false, noBoard = false) {
   const clock = mock.clock(on, { now: T0 })
@@ -107,7 +108,7 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: stri
   on('process.run', async (_, e) => {
     const argv = [...e.argv]
     calls.push(argv)
-    if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
+    if (argv[0] === 'bw' && argv[1] === 'registry') return { value: { exitCode: 0, stdout: `${REGISTRY}\n`, stderr: '' } }
     if (argv[0] === 'bw' && argv[1] === 'config') {
       const p = typeof prefix === 'string' ? prefix : prefix.current
       return { value: p === undefined ? NO_BOARD : { exitCode: 0, stdout: `${p}\n`, stderr: '' } }

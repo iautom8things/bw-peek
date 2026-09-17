@@ -72,20 +72,29 @@ export function normalizeId(raw: string, defaultPrefix?: string): string | undef
   return undefined
 }
 
-// the id prefixes bw knows: ~/.beadwork/registry.json, `repos` keyed by path with a `prefix` each
-export function parseRegistry(json: string): string[] {
+// bw's host-local registry as `bw registry list --json` prints it: one `{ path, prefix }` per
+// registered repo, `[]` while empty
+type RegistryEntry = { path?: unknown; prefix?: unknown }
+function registryEntries(json: string): { path: string; prefix: string }[] {
   try {
-    const parsed = JSON.parse(json) as { repos?: Record<string, { prefix?: unknown }> }
-    const repos = parsed.repos ?? {}
-    const out = new Set<string>()
-    for (const entry of Object.values(repos)) {
+    const parsed = JSON.parse(json) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: { path: string; prefix: string }[] = []
+    for (const entry of parsed as RegistryEntry[]) {
       const p = entry?.prefix
-      if (typeof p === 'string' && new RegExp(`^${PREFIX}$`).test(p)) out.add(p)
+      const path = entry?.path
+      if (typeof p === 'string' && typeof path === 'string' && path !== '' && new RegExp(`^${PREFIX}$`).test(p)) out.push({ path, prefix: p })
     }
-    return [...out].sort()
+    return out
   } catch {
+    // an unreadable registry names no repos
     return []
   }
+}
+
+// the id prefixes bw knows, sorted, each once
+export function parseRegistry(json: string): string[] {
+  return [...new Set(registryEntries(json).map(e => e.prefix))].sort()
 }
 
 // a matcher for ids with one of these prefixes, longest prefix first so `spire-cl-x1` is not read
@@ -200,15 +209,7 @@ export function parseTicket(json: unknown): Ticket | undefined {
 // prefix → the repo paths bw's registry files it under (two clones can share one)
 export function parseRegistryPaths(json: string): Record<string, string[]> {
   const out: Record<string, string[]> = {}
-  try {
-    const parsed = JSON.parse(json) as { repos?: Record<string, { prefix?: unknown }> }
-    for (const [path, entry] of Object.entries(parsed.repos ?? {})) {
-      const p = entry?.prefix
-      if (typeof p === 'string' && new RegExp(`^${PREFIX}$`).test(p)) (out[p] ??= []).push(path)
-    }
-  } catch {
-    // an unreadable registry names no repos
-  }
+  for (const { path, prefix } of registryEntries(json)) (out[prefix] ??= []).push(path)
   return out
 }
 

@@ -388,7 +388,7 @@ function body(els: Els, v: View, columns: number, actions: Actions): RenderEleme
       return (
         <Box flexDirection="column" marginTop={1} marginLeft={2}>
           <Text color="red">{`✗ no ticket matches ${l.id}`}</Text>
-          <Text dimColor>bw looks the prefix up in ~/.beadwork/registry.json; a repo joins it the first time bw runs there.</Text>
+          <Text dimColor>bw looks the prefix up in its registry (bw registry list); with registry.auto on in ~/.bw a repo joins it the next time bw runs there.</Text>
         </Box>
       )
     default:

@@ -8,7 +8,7 @@
       "name": "bw-peek",
       "source": "./",
       "description": "A Beadwork ticket pane inside Claude Code: /bw <id> or a search box runs bw show and draws the ticket; every ticket id a reply mentions gets a button that opens it.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": { "name": "Manuel Zubieta", "email": "i@autom8things.com" },
       "homepage": "https://github.com/iautom8things/bw-peek",
       "repository": "https://github.com/iautom8things/bw-peek",

@@ -51,6 +51,7 @@ let commandRegistered: Promise<void> | undefined
 let known: Known | undefined
 let knownAt = 0
 let knownRefresh: Promise<void> | undefined
+let boardWarned = false
 
 let mentionButtons = true
 let bareMentions = true
@@ -58,8 +59,9 @@ let mentionCap = 6
 let collapsedRows = 8
 let digestChars = 50
 
+// the engine prefixes every line with the plugin's name already
 function log($: EngineInterface, text: string): void {
-  $.ui.log(`bw-peek: ${text}`)
+  $.ui.log(text)
 }
 
 // once per module load (session start, and again after a hot reload): the registry's prefixes,
@@ -104,20 +106,25 @@ function refreshKnown($: EngineInterface): Promise<void> {
   const prefix = defaultPrefix
   knownRefresh ??= (async () => {
     try {
+      // the jq pipeline first; when it fails (no jq, or no board) the text listing decides, quietly
       let r = await $.process.run(LIST_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-      if (r.exitCode !== 0 || r.stdout.trim() === '') {
-        log($, `id pipeline failed (exit ${r.exitCode}): ${r.stderr.trim() || 'no output'}; reading the text listing`)
-        r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-      }
-      if (r.exitCode === 0) {
-        const ids = parseListIds(r.stdout, prefix)
-        const before = known
-        const changed = before === undefined || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
-        known = { prefix, ids }
-        if (changed) $.ui.invalidate('ui.render')
-      } else log($, `bw list --all failed (exit ${r.exitCode}): ${r.stderr.trim()}`)
+      if (r.exitCode !== 0 || r.stdout.trim() === '') r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
+      // no board to read (a repo without `bw init`, bw missing): an empty set, said once, and full
+      // ids keep working through bw's registry
+      const ids = r.exitCode === 0 ? parseListIds(r.stdout, prefix) : new Set<string>()
+      if (r.exitCode !== 0 && !boardWarned) {
+        boardWarned = true
+        log($, `no board here, bare ids stay plain: ${r.stderr.trim() || `bw list exit ${r.exitCode}`}`)
+      } else if (r.exitCode === 0) boardWarned = false
+      const before = known
+      const changed = before === undefined || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
+      known = { prefix, ids }
+      if (changed) $.ui.invalidate('ui.render')
     } catch (err) {
-      log($, `bw list --all failed: ${err}`)
+      if (!boardWarned) {
+        boardWarned = true
+        log($, `bw list failed: ${err}`)
+      }
     } finally {
       knownAt = await $.clock.now()
       knownRefresh = undefined

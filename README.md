@@ -131,6 +131,11 @@ passes over the block, about 70 µs per KB). A set lookup per candidate is
 nanoseconds. The one-time id list is about 0.3 s for 500 tickets and runs off
 the render path.
 
+**Outside a Beadwork repo.** In a directory without `bw init` the plugin stays
+quiet: one log line says there is no board here, bare ids stay plain text,
+and full ids (`adf-c50`) still get their buttons and open through bw's
+registry, since `bw show` resolves any registered prefix from any cwd.
+
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
 `[ Refresh ]` always runs `bw show` again. The `recent` row is a trail of
 tickets, not of searches: an id joins it once bw has answered with a ticket,

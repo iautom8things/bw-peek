@@ -94,10 +94,12 @@ function run($: Engine, args: string) {
 }
 
 // the world: HOME, the registry, `bw config get prefix`, and `bw show` from a table
-function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'adf', stored: Record<string, unknown> = {}, lists: string[] = [], noJq = false) {
+function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'adf', stored: Record<string, unknown> = {}, lists: string[] = [], noJq = false, noBoard = false) {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on, stored)
   const calls: string[][] = []
+  const logs: unknown[] = []
+  const NO_BOARD = { exitCode: 1, stdout: '', stderr: 'error: beadwork not initialized. Run: bw init\n' }
   on('env.get', async () => ({ value: '/home/mz' }))
   on('process.run', async (_, e) => {
     const argv = [...e.argv]
@@ -105,10 +107,11 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'ad
     if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
     if (argv[0] === 'bw' && argv[1] === 'config') return { value: { exitCode: 0, stdout: `${prefix}\n`, stderr: '' } }
     if (argv[0] === 'sh' && argv[2]?.startsWith('bw list --all --json | jq')) {
+      if (noBoard) return { value: { ...NO_BOARD, exitCode: 0 } } // jq exits 0 on empty input; no pipefail
       if (noJq) return { value: { exitCode: 127, stdout: '', stderr: 'sh: jq: command not found' } }
       return { value: { exitCode: 0, stdout: lists.shift() ?? LIST, stderr: '' } }
     }
-    if (argv[0] === 'bw' && argv[1] === 'list') return { value: { exitCode: 0, stdout: LIST_TEXT, stderr: '' } }
+    if (argv[0] === 'bw' && argv[1] === 'list') return { value: noBoard ? NO_BOARD : { exitCode: 0, stdout: LIST_TEXT, stderr: '' } }
     if (argv[0] === 'bw' && argv[1] === 'show') {
       const id = argv[2] as string
       const r = shows[id]
@@ -118,7 +121,10 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'ad
   })
   on('command.register', async (_, e) => ({ value: { command: e.name } }))
   on('ui.invalidate', async () => ({ value: undefined }))
-  on('ui.log', async () => ({ value: undefined }))
+  on('ui.log', async (_, e) => {
+    logs.push(e)
+    return { value: undefined }
+  })
   on('ui.toast', async () => ({ value: undefined }))
   on('ui.open', async () => ({ value: undefined }))
   on('ui.close', async () => ({ value: undefined }))
@@ -126,7 +132,7 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'ad
   // the engine's own drawing of a reply: its text in a Box
   on('ui.render', async (_, e) => ({ type: 'Box', children: [e.component === 'AssistantMessage' ? (e.props as { text: string }).text : ''] }))
   on('command.run', async () => ({}))
-  return { clock, calls }
+  return { clock, calls, logs }
 }
 
 const ok = (t: unknown): Run => ({ exitCode: 0, stdout: JSON.stringify(t), stderr: '' })
@@ -305,6 +311,28 @@ describe('under a reply', () => {
     expect(calls).toContainEqual(['bw', 'list', '--all'])
     // adf-lxh is on the text page only as a blocker, and still counts
     expect(textOf(await reply($, 'c50 blocks lxh; wxh.5 waits.'))).toContain('◈ [adf-c50] [adf-lxh] [adf-wxh.5]')
+  })
+
+  test('a repo without a board: full ids still get buttons, bare ids stay plain, one log line in all', async ($, on) => {
+    const { calls, clock, logs } = world(on, {}, 'adf', {}, [], false, true)
+    await reply($, 'warm', 'msg-0')
+    await clock.settle()
+    // the pipeline, then the text listing, then nothing more for this redraw
+    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(1)
+    expect(calls.filter(c => c[0] === 'bw' && c[1] === 'list')).toHaveLength(1)
+    const tree = textOf(await reply($, 'c50 blocks adf-lxh; see think-1pp.'))
+    expect(tree).toContain('◈ [adf-lxh] [think-1pp]')
+    expect(tree).not.toContain('[adf-c50]')
+    // said once, without the plugin naming itself (the engine does that)
+    expect(logs).toHaveLength(1)
+    expect(JSON.stringify(logs[0])).toContain('beadwork not initialized')
+    expect(JSON.stringify(logs[0])).not.toContain('bw-peek')
+    // a later redraw past the stale window reads again and stays quiet
+    await clock.advance(3 * 60_000)
+    await reply($, 'still c50', 'msg-9')
+    await clock.settle()
+    expect(calls.filter(c => c[0] === 'bw' && c[1] === 'list')).toHaveLength(2)
+    expect(logs).toHaveLength(1)
   })
 
   test('a reply without a known prefix is left to the engine', async ($, on) => {

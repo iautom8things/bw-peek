@@ -37,6 +37,7 @@ const LIST_TEXT_ARGV: readonly string[] = ['bw', 'list', '--all']
 
 let ready: Promise<void> | undefined
 let matcher: RegExp | undefined
+let prefixes: string[] = []
 let defaultPrefix: string | undefined
 let recent: string[] = []
 let current: string | undefined
@@ -66,9 +67,27 @@ function log($: EngineInterface, text: string): void {
 
 // once per module load (session start, and again after a hot reload): the registry's prefixes,
 // this repo's prefix, the recent list
+// the prefix of the repo the session's shell is in now. A `cd` through the Bash tool moves the
+// session's cwd, and $.process.run follows it, so this is read before every board read rather
+// than once at start; a repo without `bw init` answers with an error
+async function readPrefix($: EngineInterface): Promise<{ prefix: string } | { error: string }> {
+  try {
+    const r = await $.process.run(['bw', 'config', 'get', 'prefix'], { timeoutMs: 8000 })
+    const p = r.stdout.trim().toLowerCase()
+    if (r.exitCode !== 0) return { error: r.stderr.trim() || `bw config get prefix exit ${r.exitCode}` }
+    if (!/^[a-z][a-z0-9_-]{0,23}$/.test(p)) return { error: `unusable prefix ${JSON.stringify(p)}` }
+    if (!prefixes.includes(p)) {
+      prefixes.push(p)
+      matcher = mentionMatcher(prefixes)
+    }
+    return { prefix: p }
+  } catch (err) {
+    return { error: String(err) }
+  }
+}
+
 function ensureReady($: EngineInterface): Promise<void> {
   ready ??= (async () => {
-    const prefixes: string[] = []
     try {
       const home = await $.env.get('HOME')
       if (home !== undefined && home !== '') {
@@ -79,17 +98,9 @@ function ensureReady($: EngineInterface): Promise<void> {
     } catch (err) {
       log($, `registry read failed: ${err}`)
     }
-    try {
-      const r = await $.process.run(['bw', 'config', 'get', 'prefix'], { timeoutMs: 8000 })
-      const p = r.stdout.trim().toLowerCase()
-      if (r.exitCode === 0 && /^[a-z][a-z0-9_-]{0,23}$/.test(p)) {
-        defaultPrefix = p
-        if (!prefixes.includes(p)) prefixes.push(p)
-      }
-    } catch (err) {
-      log($, `bw config get prefix failed: ${err}`)
-    }
     matcher = mentionMatcher(prefixes)
+    const here = await readPrefix($)
+    defaultPrefix = 'prefix' in here ? here.prefix : undefined
     try {
       const saved = await $.store.get(RECENT_KEY)
       if (Array.isArray(saved)) recent = saved.filter((x): x is string => typeof x === 'string' && isTicketId(x)).slice(0, RECENT_CAP)
@@ -102,22 +113,29 @@ function ensureReady($: EngineInterface): Promise<void> {
 
 // the ids on this repo's board, for bare mentions; one run at a time, the old set drawn meanwhile
 function refreshKnown($: EngineInterface): Promise<void> {
-  if (defaultPrefix === undefined || !bareMentions) return Promise.resolve()
-  const prefix = defaultPrefix
+  if (!bareMentions) return Promise.resolve()
   knownRefresh ??= (async () => {
     try {
-      // the jq pipeline first; when it fails (no jq, or no board) the text listing decides, quietly
-      let r = await $.process.run(LIST_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-      if (r.exitCode !== 0 || r.stdout.trim() === '') r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
-      // no board to read (a repo without `bw init`, bw missing): an empty set, said once, and full
-      // ids keep working through bw's registry
-      const ids = r.exitCode === 0 ? parseListIds(r.stdout, prefix) : new Set<string>()
-      if (r.exitCode !== 0 && !boardWarned) {
+      const here = await readPrefix($)
+      defaultPrefix = 'prefix' in here ? here.prefix : undefined
+      let ids = new Set<string>()
+      let error = 'error' in here ? here.error : undefined
+      if (error === undefined) {
+        // the jq pipeline first; when it fails (no jq) the text listing decides, quietly
+        let r = await $.process.run(LIST_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
+        if (r.exitCode !== 0 || r.stdout.trim() === '') r = await $.process.run(LIST_TEXT_ARGV, { timeoutMs: LIST_TIMEOUT_MS })
+        if (r.exitCode === 0) ids = parseListIds(r.stdout, defaultPrefix ?? '')
+        else error = r.stderr.trim() || `bw list exit ${r.exitCode}`
+      }
+      // no board here (a repo without `bw init`, bw missing): an empty set, said once, and full ids
+      // keep working through bw's registry
+      if (error !== undefined && !boardWarned) {
         boardWarned = true
-        log($, `no board here, bare ids stay plain: ${r.stderr.trim() || `bw list exit ${r.exitCode}`}`)
-      } else if (r.exitCode === 0) boardWarned = false
+        log($, `no board here, bare ids stay plain: ${error}`)
+      } else if (error === undefined) boardWarned = false
       const before = known
-      const changed = before === undefined || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
+      const prefix = defaultPrefix ?? ''
+      const changed = before === undefined || before.prefix !== prefix || ids.size !== before.ids.size || [...ids].some(id => !before.ids.has(id))
       known = { prefix, ids }
       if (changed) $.ui.invalidate('ui.render')
     } catch (err) {
@@ -136,7 +154,7 @@ function refreshKnown($: EngineInterface): Promise<void> {
 // never blocks a drawing on bw: a missing or stale list is fetched in the background and the reply
 // redraws (the refresh invalidates) once it lands
 async function knownIfFresh($: EngineInterface): Promise<Known | undefined> {
-  if (defaultPrefix === undefined || !bareMentions) return undefined
+  if (!bareMentions) return undefined
   if (known === undefined || (await $.clock.now()) - knownAt > KNOWN_STALE_MS) fire($, 'bw list', refreshKnown($))
   return known
 }

@@ -25,7 +25,8 @@ import {
 
 // the element table of a surface that has an Input (the terminal and the desktop; mobile has none
 // yet, and the pane hook passes there)
-export type Els = Elements['terminal'] | Elements['desktop']
+// every surface with an Input (mobile has none, so the pane hook passes there); vscode lacks only Client, unused here
+export type Els = Elements['terminal'] | Elements['desktop'] | Elements['vscode']
 // any surface's table: what the mention row, Box, Text and Button only, takes
 export type AnyEls = Elements[keyof Elements]
 

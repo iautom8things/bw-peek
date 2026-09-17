@@ -94,7 +94,8 @@ function run($: Engine, args: string) {
 }
 
 // the world: HOME, the registry, `bw config get prefix`, and `bw show` from a table
-function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'adf', stored: Record<string, unknown> = {}, lists: string[] = [], noJq = false, noBoard = false) {
+// `prefix` may be a holder whose `current` the test moves, the way a `cd` moves the session's cwd
+function world(on: On, shows: Record<string, Run | undefined> = {}, prefix: string | { current: string | undefined } = 'adf', stored: Record<string, unknown> = {}, lists: string[] = [], noJq = false, noBoard = false) {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on, stored)
   const calls: string[][] = []
@@ -105,7 +106,10 @@ function world(on: On, shows: Record<string, Run | undefined> = {}, prefix = 'ad
     const argv = [...e.argv]
     calls.push(argv)
     if (argv[0] === 'cat') return { value: { exitCode: 0, stdout: REGISTRY, stderr: '' } }
-    if (argv[0] === 'bw' && argv[1] === 'config') return { value: { exitCode: 0, stdout: `${prefix}\n`, stderr: '' } }
+    if (argv[0] === 'bw' && argv[1] === 'config') {
+      const p = typeof prefix === 'string' ? prefix : prefix.current
+      return { value: p === undefined ? NO_BOARD : { exitCode: 0, stdout: `${p}\n`, stderr: '' } }
+    }
     if (argv[0] === 'sh' && argv[2]?.startsWith('bw list --all --json | jq')) {
       if (noBoard) return { value: { ...NO_BOARD, exitCode: 0 } } // jq exits 0 on empty input; no pipefail
       if (noJq) return { value: { exitCode: 127, stdout: '', stderr: 'sh: jq: command not found' } }
@@ -332,6 +336,33 @@ describe('under a reply', () => {
     await reply($, 'still c50', 'msg-9')
     await clock.settle()
     expect(calls.filter(c => c[0] === 'bw' && c[1] === 'list')).toHaveLength(2)
+    expect(logs).toHaveLength(1)
+  })
+
+  test('a cd through the Bash tool moves the board with the session: away from one, and back', async ($, on) => {
+    const here = { current: 'adf' as string | undefined }
+    const { calls, clock, logs } = world(on, {}, here)
+    await reply($, 'warm', 'msg-0')
+    await clock.settle()
+    expect(textOf(await reply($, 'c50 first.', 'msg-1'))).toContain('◈ [adf-c50]')
+    // the shell moves to a repo without bw init; the next stale read finds no board
+    here.current = undefined
+    await clock.advance(3 * 60_000)
+    await reply($, 'c50 again', 'msg-2')
+    await clock.settle()
+    const away = textOf(await reply($, 'c50 and adf-lxh here.', 'msg-3'))
+    expect(away).toContain('◈ [adf-lxh]')
+    expect(away).not.toContain('[adf-c50]')
+    expect(logs).toHaveLength(1)
+    expect(JSON.stringify(logs[0])).toContain('beadwork not initialized')
+    // no list is attempted while the prefix call fails
+    expect(calls.filter(c => c[0] === 'sh')).toHaveLength(1)
+    // and back
+    here.current = 'adf'
+    await clock.advance(3 * 60_000)
+    await reply($, 'c50 back', 'msg-4')
+    await clock.settle()
+    expect(textOf(await reply($, 'c50 back.', 'msg-5'))).toContain('◈ [adf-c50]')
     expect(logs).toHaveLength(1)
   })
 

@@ -131,10 +131,13 @@ passes over the block, about 70 µs per KB). A set lookup per candidate is
 nanoseconds. The one-time id list is about 0.3 s for 500 tickets and runs off
 the render path.
 
-**Outside a Beadwork repo.** In a directory without `bw init` the plugin stays
-quiet: one log line says there is no board here, bare ids stay plain text,
-and full ids (`adf-c50`) still get their buttons and open through bw's
-registry, since `bw show` resolves any registered prefix from any cwd.
+**The board follows the shell.** A `cd` the agent runs through the Bash tool
+moves the session's cwd, so the repo's prefix is read again before every
+board read, not once at start. In a directory without `bw init` the plugin
+stays quiet: one log line says there is no board here, bare ids stay plain
+text, and full ids (`adf-c50`) still get their buttons and open through bw's
+registry, since `bw show` resolves any registered prefix from any cwd. Back
+in a repo with a board, the bare ids light up again on the next read.
 
 **Freshness.** A ticket shown again within 30 seconds is not re-fetched;
 `[ Refresh ]` always runs `bw show` again. The `recent` row is a trail of
@@ -160,7 +163,7 @@ the config menu.
 
 | piece | mechanism |
 | --- | --- |
-| prefixes | `cat $HOME/.beadwork/registry.json` at session start (and after a hot reload), `repos.*.prefix`; the session repo's own prefix from `bw config get prefix` is added |
+| prefixes | `cat $HOME/.beadwork/registry.json` at session start (and after a hot reload), `repos.*.prefix`; the session repo's own prefix from `bw config get prefix`, read again before every board read since a Bash `cd` moves the session's cwd |
 | mentions | `ui.render` on `AssistantMessage`: a regex over `e.props.text` built from those prefixes, longest first, word-bounded, plus bare `[a-z0-9]{3,4}(\.\d+)*` words looked up in the board's id set; the engine's own drawing is wrapped in a column with the button row beneath |
 | the board | `sh -c 'bw list --all --json \| jq -r ".[].id"'`, ids of the session prefix read off the lines; the JSON itself never enters the plugin (4 MB with every description and comment inline for 500 tickets, and `$.process.run` cuts output at a limit). When the pipeline fails (no jq), the `bw list --all` text listing, whose lines carry the id near the front. Refreshed when stale or after a `tool.call` for Bash whose command runs `bw create`, `bw delete` or `bw import` |
 | the pane | `$.ui.open({ id: 'bw', focus, closeOnEscape, rows: 24 })`, drawn by `ui.render` on `Pane`; `/bw` through `$.command.register` (`immediate`, so it works mid-turn) |
